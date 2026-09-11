@@ -1,4 +1,4 @@
-# DeRoute 调用量优化（2026-09-10）
+# DeRoute 调用量优化（2026-09-11）
 
 本轮优先减少没有增加有效信息的模型往返。修改集中在规划调度、协议字段修复、重复核验、失败恢复、跨任务并发及断点恢复；小模型权重和量化配置不变。
 
@@ -31,6 +31,11 @@
 | 修订上限 | 每节点最多 2 次，同时一题累计最多 3 次 | 总额耗尽后不再允许 `revise`，减少低收益的规划、重跑和复核 |
 | 预算与终止 | 规划次数、总调用和运行时间跨续跑累计；预算耗尽、abort、修订耗尽等终止题在 `--resume` 时跳过 | 网络/额度等可恢复异常可继续；已终止样本不会因重复运行命令而得到新预算，也不重复追加同一结果 |
 | 统计 | 保留缓存命中/未命中 token；记录整批实际墙钟；`compare_runs.py` 同时展示调用、缓存和两种耗时 | 并发后各题耗时之和包含重叠，性能对比应使用 `run_metrics.json` 的批次墙钟 |
+| 预声明终点 | `finish_after_success` 可与 `add`/`add_batch` 同时提交 | 仅对未修订、未接管/复核、全链直接证据的完整图自动结束，否则恢复增量 planner |
+| 自适应小模型证据 | 保留 top-3，字符预算允许时最多扩展到 top-5 | 不增加 Qwen 调用，尝试减少检索遗漏导致的 DeepSeek 接管 |
+| 请求重试 | 408/429/5xx/网络错误最多退避重试 2 次 | 可避免整题暂停后续跑再规划；同时单独统计逻辑调用与实际 HTTP 请求 |
+| 按用途输出上限 | planner 384，answer/review 512，final check 384 | 不用全局 256 截断正常结果；该项防异常长输出，不直接减少调用数 |
+| 耗时拆分 | 大模型记录限流排队/服务/退避，Qwen 记录 GPU 锁排队/推理 | 后续根据实测决定 DeepSeek 并发和 5090 上的 Qwen 服务方式，不凭累计时间推测 |
 
 关键默认参数位于 `model.json`：
 
@@ -40,15 +45,18 @@
     "max_batch_nodes": 3,
     "max_total_revisions": 3,
     "max_inflight_tasks": 4,
-    "final_check_mode": "planner"
+    "final_check_mode": "planner",
+    "auto_finish_mode": "safe"
   },
   "routing": {
-    "small_route_mode": "cost"
+    "small_route_mode": "cost",
+    "small_top_k": 3,
+    "small_max_top_k": 5
   }
 }
 ```
 
-`max_batch_nodes` 支持 1–8，`max_inflight_tasks` 支持 1–16；`final_check_mode` 支持 `planner`、`always`；`small_route_mode` 支持 `cost`、`parallel_only`。旧自定义配置未包含新增字段时会补入默认值。24 次规划、48 次模型调用及 600 秒为每题累计上限；在途请求仍会等待完成或超时，因此运行时间可能略超上限。
+`max_batch_nodes` 支持 1–8，`max_inflight_tasks` 支持 1–16；`final_check_mode` 支持 `planner`、`always`；`auto_finish_mode` 支持 `safe`、`off`；`small_route_mode` 支持 `cost`、`parallel_only`。旧自定义配置未包含新增字段时会补入默认值。24 次规划、48 次逻辑模型调用及 600 秒为每题累计上限；请求层重试单独计入物理请求数。在途请求仍会等待完成或超时，因此运行时间可能略超上限。
 
 ## 离线验证
 
@@ -58,7 +66,9 @@
 bash agent.sh -m unittest discover -s tests -v
 ```
 
-**94 项测试通过**，包括真实客户端接口调用次数、批内依赖的真实答案传输、大小模型并行、跨任务并发、逐任务续跑、非法批次不产生部分执行、跨恢复预算、总修订上限、缓存 token 保存、旧日志兼容、两种路由模式及独立终检开关。测试客户端是模拟模型，不发远程请求，也不加载 Qwen 权重。
+**100 项测试通过**，包括真实客户端接口调用次数、安全自动结束、非法终点声明的批次原子性、退避重试与物理请求统计、按用途输出上限、自适应检索、大小模型并行、跨任务并发、逐任务续跑、跨恢复预算、缓存 token 保存及独立终检开关。测试客户端是模拟模型，不发远程请求，也不加载 Qwen 权重。
+
+新增的确定性两跳用例在两个节点均通过直接证据校验时，使用 `finish_after_success` 将 planner 从 2 次降为 1 次，总调用从 4 次降为 3 次。这只证明调度器确实省掉了末尾调用，不能外推为 100 题节省比例。
 
 同一个确定性模拟任务“两个独立分支，再汇合”使用修改前备份与当前实现分别执行：
 
@@ -79,21 +89,21 @@ bash agent.sh -m unittest discover -s tests -v
 
 ## 新实验与恢复
 
-**协议已升至版本 11，必须使用新的输出目录，不能直接续跑旧版检查点。** 本轮没有启动新的付费模型评测，也没有修改历史实验结果。
+**协议已升至版本 12，必须使用新的输出目录，不能直接续跑旧版检查点。** 本轮没有启动新的付费模型评测，也没有修改历史实验结果。
 
 先在此前相同 100 题文件中试跑前 5 题：
 
 ```bash
 cd /home/suibo/HiNA/DeRoute
 bash agent.sh run.py run --input outputs/parallel100_subset.jsonl --limit 5 \
-  --output outputs/devtest_random100_v3_smoke --live --task-workers 4
+  --output outputs/devtest_random100_flash_v4_smoke --live --task-workers 4
 ```
 
 需要跑全部 100 题时，用同一配置和输出目录：
 
 ```bash
 bash agent.sh run.py run --input outputs/parallel100_subset.jsonl --all \
-  --output outputs/devtest_random100_v3 --live --task-workers 4
+  --output outputs/devtest_random100_flash_v4 --live --task-workers 4
 ```
 
 中断后在相同命令追加 `--resume`。每题状态位于 `checkpoints/`，本次及跨续跑累计墙钟位于 `run_metrics.json`。`--resume` 只继续尚可恢复的任务，跳过已成功和已终止的失败任务。若希望以新预算重新做实验，请明确使用新输出目录。更改终检模式、模型配置或提示词也需要新目录，避免混入不同实验条件。
@@ -102,7 +112,7 @@ bash agent.sh run.py run --input outputs/parallel100_subset.jsonl --all \
 
 ```bash
 bash agent.sh run.py run --input outputs/parallel100_subset.jsonl --all \
-  --output outputs/devtest_random100_v3_parallel_only --live --task-workers 4 \
+  --output outputs/devtest_random100_flash_v4_parallel_only --live --task-workers 4 \
   --small-route-mode parallel_only
 ```
 

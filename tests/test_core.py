@@ -8,15 +8,16 @@ from pathlib import Path
 import tempfile
 import threading
 import unittest
-from unittest.mock import patch
+import urllib.error
+from unittest.mock import MagicMock, patch
 
 from dataset import read_dataset
 from compare_runs import workload
 from decompose import load_prompt, run_task, summarize_calls, write_json
-from executor import FINISH_PROMPT, REVIEW_PROMPT, check_finish, execute_node, rank_paragraphs, readable_paragraphs, route_node, validate_answer
+from executor import FINISH_PROMPT, REVIEW_PROMPT, check_finish, execute_node, rank_paragraphs, readable_paragraphs, route_node, select_small_paragraphs, validate_answer
 from graph import canonicalize_node, levels, ready_nodes, references, resolve_inputs, validate_finish, validate_node, validate_revision, validate_temporal_scope
 from evaluate import answer_scores, evaluate
-from model import APIModel, CallBudget, LocalModel, ModelError, load_config, parse_json
+from model import APIModel, CallBudget, LocalModel, ModelError, load_config, parse_json, parse_model_json
 from run import checkpoint_records, completed_records, run_selected, task_checkpoint
 from decompose import fingerprint, workflow_signature, clean_paragraph_hint
 
@@ -705,6 +706,58 @@ class CoreTests(unittest.TestCase):
             request = opener.return_value.open.call_args.args[0]
             messages = json.loads(request.data)["messages"]
             self.assertIn("JSON", messages[0]["content"])
+
+    def test_purpose_output_limit_is_sent_and_recorded(self):
+        cfg = {"model": "deepseek-test", "base_url": "https://example.invalid/v1",
+               "api_key_env": "DEEPSEEK_API_KEY", "max_tokens": 100, "timeout_seconds": 10,
+               "purpose_max_tokens": {"planner": 40}}
+        body = {"choices": [{"message": {"content": '{"valid":true}'}, "finish_reason": "stop"}]}
+        with patch.dict(os.environ, {"DEEPSEEK_API_KEY": "test"}), patch("urllib.request.build_opener") as opener:
+            opener.return_value.open.return_value.__enter__.return_value.read.return_value = json.dumps(body).encode()
+            budget = CallBudget(2)
+            value = budget.call(APIModel(cfg), "Return JSON.", {}, "planner")
+            request = opener.return_value.open.call_args.args[0]
+        self.assertEqual(json.loads(request.data)["max_tokens"], 40)
+        self.assertEqual(value["max_tokens"], 40)
+        self.assertEqual(budget.snapshot()[0]["max_tokens"], 40)
+
+    def test_api_retries_429_and_reports_physical_requests(self):
+        cfg = {"model": "deepseek-test", "base_url": "https://example.invalid/v1",
+               "api_key_env": "DEEPSEEK_API_KEY", "max_tokens": 100, "timeout_seconds": 10,
+               "max_retries": 1, "retry_backoff_seconds": 0, "retry_max_backoff_seconds": 0}
+        body = {"choices": [{"message": {"content": '{"valid":true}'}, "finish_reason": "stop"}]}
+        response_stream = MagicMock()
+        response_stream.__enter__.return_value.read.return_value = json.dumps(body).encode()
+        rate_limited = urllib.error.HTTPError("https://example.invalid", 429, "limited",
+                                             {"Retry-After": "0"}, None)
+        opener = MagicMock()
+        opener.open.side_effect = [rate_limited, response_stream]
+        with patch.dict(os.environ, {"DEEPSEEK_API_KEY": "test"}), \
+                patch("urllib.request.build_opener", return_value=opener), patch("time.sleep"):
+            value = APIModel(cfg).complete("Return JSON.", "question", live=True)
+        self.assertEqual(value["request_attempts"], 2)
+        self.assertEqual(len(value["attempt_errors"]), 1)
+        metrics = summarize_calls([{"purpose": "planner", "response": value}])
+        self.assertEqual(metrics["planner"]["calls"], 1)
+        self.assertEqual(metrics["planner"]["physical_requests"], 2)
+
+    def test_model_json_removes_surrounding_text_without_relaxing_inner_json(self):
+        repairs = []
+        self.assertEqual(parse_model_json('Result:\n{"valid":true}\nDone.', repairs), {"valid": True})
+        self.assertEqual(repairs[0]["repair"], "removed_surrounding_text")
+        with self.assertRaises(ValueError):
+            parse_model_json('Result: {"a":1,"a":2}')
+
+    def test_adaptive_small_retrieval_uses_extra_candidates_within_budget(self):
+        paragraphs = [{"idx": i, "title": f"Alpha {i}", "paragraph_text": "Alpha was mentioned here."}
+                      for i in range(1, 7)]
+        cfg = dict(config()["routing"], small_top_k=3, small_max_top_k=5,
+                   small_max_context_chars=10000)
+        selected = select_small_paragraphs("Where is Alpha?", {}, paragraphs, cfg)
+        self.assertEqual(len(selected), 5)
+        cfg["small_max_context_chars"] = sum(len(p["title"]) + len(p["paragraph_text"])
+                                                for p in selected[:3]) + len("Where is Alpha?")
+        self.assertEqual(len(select_small_paragraphs("Where is Alpha?", {}, paragraphs, cfg)), 3)
 
     def test_resume_loader_retains_failed_tasks_with_successful_nodes(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as tmp:

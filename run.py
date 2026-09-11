@@ -192,7 +192,7 @@ def run_selected(tasks, config, output, resume=False):
 def main(argv=None):
     parser = argparse.ArgumentParser(description="DeRoute：MuSiQue逐步拆解与大小模型并行执行")
     parser.add_argument("command", nargs="?", default="show", choices=["show", "run", "decompose"])
-    parser.add_argument("--input", type=Path, default=ROOT / "data_test",
+    parser.add_argument("--input", type=Path, default=ROOT / "data_test/musique_ans_v1.0_dev_test.jsonl",
                         help="MuSiQue JSONL文件或目录")
     selection = parser.add_mutually_exclusive_group()
     selection.add_argument("--limit", type=int, default=5, help="从头选择N条，默认5条")
@@ -206,6 +206,8 @@ def main(argv=None):
     parser.add_argument("--task-workers", type=int, help="覆盖同时处理的任务数；默认读取max_inflight_tasks")
     parser.add_argument("--small-route-mode", choices=["cost", "parallel_only"],
                         help="cost优先节省API；parallel_only仅在任务内并行前沿使用小模型")
+    parser.add_argument("--auto-finish-mode", choices=["safe", "off"],
+                        help="safe允许终点预声明省去末尾planner；off用于消融对照")
     args = parser.parse_args(argv)
     try:
         if args.limit < 1:
@@ -245,6 +247,8 @@ def main(argv=None):
             config["runtime"]["max_inflight_tasks"] = args.task_workers
         if args.small_route_mode is not None:
             config["routing"]["small_route_mode"] = args.small_route_mode
+        if args.auto_finish_mode is not None:
+            config["runtime"]["auto_finish_mode"] = args.auto_finish_mode
         return run_selected(tasks, config, output, args.resume)
     except (ValueError, ModelError, OSError) as exc:
         print("错误：" + str(exc), file=sys.stderr)

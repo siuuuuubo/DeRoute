@@ -2,12 +2,21 @@
   "env_file": ".env",
   "large": {
     "provider": "api",
-    "model": "deepseek-v4-pro",
+    "model": "deepseek-flash",
     "base_url": "${DEEPSEEK_BASE_URL}",
     "api_key_env": "DEEPSEEK_API_KEY",
     "max_tokens": 1024,
+    "purpose_max_tokens": {
+      "planner": 384,
+      "answer": 512,
+      "review": 512,
+      "final_check": 384
+    },
     "timeout_seconds": 120,
-    "max_concurrent": 2
+    "max_concurrent": 2,
+    "max_retries": 2,
+    "retry_backoff_seconds": 1,
+    "retry_max_backoff_seconds": 8
   },
   "small": {
     "provider": "local_transformers",
@@ -20,6 +29,7 @@
   "routing": {
     "small_max_context_chars": 6000,
     "small_top_k": 3,
+    "small_max_top_k": 5,
     "small_max_dependencies": 1,
     "fallback_to_large": true,
     "small_route_mode": "cost"
@@ -34,6 +44,7 @@
     "max_task_seconds": 600,
     "max_batch_nodes": 3,
     "max_inflight_tasks": 4,
-    "final_check_mode": "planner"
+    "final_check_mode": "planner",
+    "auto_finish_mode": "safe"
   }
 }

@@ -107,6 +107,38 @@ class CallReductionTests(unittest.TestCase):
         self.assertEqual(result["nodes"][1]["resolved_question"], "Where is AlphaTown?")
         self.assertEqual(clients["small"].used, "AlphaTown")
 
+    def test_predeclared_direct_final_node_saves_finish_planner_call(self):
+        class Client(FakeClient):
+            def complete(self, system, user, live=False):
+                data = json.loads(user)
+                self.requests.append((system, data))
+                if system == "PLAN":
+                    if data["nodes"]:
+                        raise AssertionError("safe auto finish should avoid a second planner call")
+                    return response({"action": "add_batch", "nodes": [
+                        node(), dict(node(2), question="Where is #1?", depends_on=[])],
+                        "finish_after_success": {"final_node": "n2", "reason":
+                            "n2 performs the final location relation and returns a place name"}})
+                if data.get("upstream"):
+                    return response(answer(used=["n1"]))
+                return response(answer())
+        clients = {r: Client(r) for r in ("small", "large")}
+        result, _ = self.run_flow(clients)
+        self.assertEqual(result["status"], "succeeded", result.get("error"))
+        self.assertEqual(result["metrics"]["planner"]["calls"], 1)
+        self.assertEqual(len(result["calls"]), 3)
+        self.assertEqual(result["final_review"]["method"], "planner_precommitted")
+        self.assertTrue(any(e["type"] == "auto_finish_declared" for e in result["events"]))
+
+    def test_invalid_auto_finish_declaration_does_not_commit_partial_batch(self):
+        client = FakeClient("large")
+        client.complete = lambda *a, **kw: response({"action": "add_batch", "nodes": [node(), node(2)],
+            "finish_after_success": {"final_node": "n9", "reason": "invalid target"}})
+        cfg = config(); cfg["runtime"]["max_planner_calls"] = 1
+        result, _ = self.run_flow({"large": client, "small": FakeClient("small")}, cfg)
+        self.assertEqual(result["nodes"], [])
+        self.assertFalse(any(e["type"] in ("node_added", "batch_added") for e in result["events"]))
+
     def test_bad_second_batch_node_does_not_commit_first_or_execute_it(self):
         class Client(FakeClient):
             def complete(self, system, user, live=False):

@@ -10,6 +10,8 @@
 4. 完成并核验最终关系：{"action":"finish","final_node":"n2","reason":"n2查询了原题最后要求的出生地关系，实际答案是地点；所有必要分支均已接入"}
 5. 修订失败节点：{"action":"revise","node":{"id":"n1","question":"Given the available records, which person founded Cedar Press? Explain any inference needed.","operation":"reason","depends_on":[],"expected_output":"person name","reason":"原查询缺乏直接关系证据，保留目标并结合上下文判断候选人物"}}
 6. 无法恢复：{"action":"abort","reason":"说明仍缺少什么信息，以及为何无法有依据地继续"}
+7. 若本次新增节点已确定是最后一跳，可在add/add_batch顶层预声明成功后结束：
+{"action":"add","node":{"id":"n2","question":"Where was #1 born?","operation":"lookup","depends_on":["n1"],"expected_output":"place name","reason":"完成原题最后的出生地关系"},"finish_after_success":{"final_node":"n2","reason":"n2对应原题最后的出生地关系，输出类型是地点"}}
 上面的Cedar Press只是说明JSON结构的虚构名称，不能用于回答测试问题。
 
 节点规则：
@@ -21,6 +23,7 @@
 - question中的#k是依赖的真实来源，代码会确定性生成depends_on（可省略该字段）。只能引用已创建节点或同批较早的节点，可引用尚未执行的节点，由调度器等待；绝不预填其答案。
 - 与已有节点独立的子问题应depends_on=[]，可以在其他分支执行时继续创建；不能为了串行而添加虚假依赖。
 - add_batch最多max_batch_nodes个节点，id依次递增。已确定的后续关系可以使用#k符号依赖一并提交，例如“查公司创始人”和“查#1出生地”；只有需要看上游实际答案才能决定问什么的步骤才留到下一轮。批量必须整体合法且每个节点均必要，不能用多余节点凑数。
+- 只在不需要上游具体答案来改变后续关系或消歧时批量生成依赖链。若后续问题的实体选择、时间范围或关系取决于真实输出，保留单步增量规划。
 - lookup节点在明确知道证据时加"paragraph_indices":[...]，锁定真正支持关系的段落。若依赖实体尚未得到、无法确定证据，允许省略，执行时再检索；不要仅因词语相似就强行锁定错误证据。reason、compare、summarize可省略。
 - operation为lookup（明确事实提取）、compare（多个结果比较）、reason（需推断/解释）、summarize（综合结果）之一。代码根据此类型、上下文大小和实际校验结果选择大小模型，你不要指定模型。
 - expected_output描述答案类型；reason解释拆分理由。不要生成子问题的实际答案。
@@ -28,6 +31,7 @@
 - 不重复执行无误的已完成子问题。需要汇合时增加显式引用所有必要分支的节点。
 - 默认提交add/add_batch/revise后，由代码执行当前前沿，期间不反复询问你是否wait。尽量把独立工作放进同一batch。仅当当前批次放不下且确定还有独立工作需要立即展开时，在动作顶层加"continue_planning":true；不要仅为了等结果设置它。输入没有运行中节点时禁止wait。
 - 只有最终答案已由某个节点成功产生，且所有创建的节点均成功、均直接或间接贡献到final_node时才能finish。不要仅仅因为某一个节点成功就结束。
+- auto_finish_mode为safe且final_check_mode为planner时，若新增的最后一跳已能从原题结构确定，优先同步给出finish_after_success，避免该节点成功后再单独调用一次planner。reason只说明关系和输出类型，不得预测答案。代码仅在最终依赖链全部是未修订的直接证据，且没有发生小模型接管或额外复核时自动结束；含推断、修订、接管、额外复核或图不完整时仍等待真实结果后重新规划。finish_after_success的final_node必须是本次新增节点，不得同时continue_planning。其他终检配置下不要输出finish_after_success。
 - 不能先生成整个问题的答案再反向编造任务流。遵守输入中的max_nodes和max_planner_calls上限。
 - 只选allowed_actions中的动作；revise只选revision_targets中的节点，finish只选finish_targets中的终点。剩余预算是整个任务累计剩余额度，续跑不会重置。validation_feedback和rejected_actions保留已发生的错误，禁止原样重复被拒绝的动作。
 - needs_revision表示执行失败后等待你诊断。failure_context保留失败理由和未核验候选；这些候选不是事实，不能作为成功的output引用。

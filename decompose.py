@@ -8,7 +8,7 @@ from pathlib import Path
 import tempfile
 import time
 
-from executor import ANSWER_PROMPT, REVIEW_PROMPT, FINISH_PROMPT, check_finish, execute_node, failure_context, rank_paragraphs, readable_paragraphs, route_node
+from executor import ANSWER_PROMPT, REVIEW_PROMPT, FINISH_PROMPT, check_finish, execute_node, failure_context, readable_paragraphs, route_node, select_small_paragraphs
 from graph import descendants_of, levels, normalize_planner_node, ready_nodes, resolve_inputs, revision_targets, validate_finish, validate_node, validate_revision, validate_temporal_scope
 from model import BudgetExceeded, CallBudget, ModelError, now, parse_model_json, resumable_model_error
 
@@ -23,7 +23,7 @@ def fingerprint(value):
 def workflow_signature(config, prompt):
     return fingerprint({"config": config, "prompt": prompt,
                         "answer_prompt": ANSWER_PROMPT, "review_prompt": REVIEW_PROMPT,
-                        "finish_prompt": FINISH_PROMPT, "protocol_version": 11})
+                        "finish_prompt": FINISH_PROMPT, "protocol_version": 12})
 
 
 def write_json(path, value):
@@ -56,9 +56,13 @@ def summarize_calls(calls):
         item = totals.setdefault(role, {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0,
                                        "total_tokens": 0, "prompt_cache_hit_tokens": 0,
                                        "prompt_cache_miss_tokens": 0, "seconds": 0,
+                                       "physical_requests": 0, "queue_wait_seconds": 0,
+                                       "service_seconds": 0, "retry_sleep_seconds": 0,
                                        "unknown_usage_calls": 0})
         response = call.get("response") or {}
         item["calls"] += 1
+        attempts = response.get("request_attempts", 1)
+        item["physical_requests"] += attempts if type(attempts) is int and attempts > 0 else 1
         usage = response.get("usage")
         if not usage:
             item["unknown_usage_calls"] += 1
@@ -66,6 +70,8 @@ def summarize_calls(calls):
                     "prompt_cache_hit_tokens", "prompt_cache_miss_tokens"):
             item[key] += (usage or {}).get(key, 0)
         item["seconds"] = round(item["seconds"] + response.get("seconds", 0), 3)
+        for key in ("queue_wait_seconds", "service_seconds", "retry_sleep_seconds"):
+            item[key] = round(item[key] + response.get(key, 0), 3)
     for item in totals.values():
         cache_total = item["prompt_cache_hit_tokens"] + item["prompt_cache_miss_tokens"]
         item["prompt_cache_hit_rate"] = round(item["prompt_cache_hit_tokens"] / cache_total, 6) if cache_total else None
@@ -120,6 +126,8 @@ def planner_payload(task, record, runtime, feedback):
             "remaining_total_revisions": max(0, maximum_revisions - sum(
                     n.get("revision_count", 0) for n in record["nodes"])),
             "max_batch_nodes": runtime.get("max_batch_nodes", 3),
+            "auto_finish_mode": runtime.get("auto_finish_mode", "safe"),
+            "final_check_mode": runtime.get("final_check_mode", "planner"),
             "remaining_planner_calls": runtime["max_planner_calls"] - sum(c["purpose"] == "planner" for c in record["calls"]),
             "remaining_model_calls": runtime["max_model_calls"] - len(record["calls"]),
             "next_node_id": f"n{len(nodes) + 1}", "allowed_actions": allowed,
@@ -210,8 +218,8 @@ def run_task(task, clients, config, prompt, save, previous=None):
         if not revision and raw.get("operation") == "lookup" and not raw.get("depends_on") and "paragraph_indices" not in raw:
             # lookup 根节点默认锁定证据：大模型未显式锁定时，用检索兜底锁定。
             # 仅对无依赖的根节点做兜底——带#k的依赖节点此时尚未替换出真实实体，检索会退化，仍交由大模型显式锁定或运行时检索。
-            top = rank_paragraphs(raw["question"], task["paragraphs"])[:config["routing"]["small_top_k"]]
-            locked = [p["idx"] for score, p in top if score > 0]
+            locked = [p["idx"] for p in select_small_paragraphs(
+                raw["question"], {}, task["paragraphs"], config["routing"])]
             if locked:
                 raw["paragraph_indices"] = locked
                 staged_events.append(("evidence_autolocked", {"node_id": raw["id"], "source": "retrieval", "indices": locked}))
@@ -239,6 +247,93 @@ def run_task(task, clients, config, prompt, save, previous=None):
         print(f"  最终核验未通过，重新修订 {node['id']}", flush=True)
         if not available_revision_targets(record["nodes"], runtime):
             record.update(status="failed", error="最终核验失败且修订次数耗尽：" + error)
+
+    def finish_record(final_node, answer, review, source):
+        record["final_review"] = review
+        record.update(status="succeeded", final_node=final_node, answer=answer)
+        record["unused_failed_nodes"] = [n["id"] for n in record["nodes"] if n["status"] == "needs_revision"]
+        for key in record["unused_failed_nodes"]:
+            event("failed_branch_replaced", node_id=key, final_node=final_node)
+        record["answer_support"] = "inferred" if any(
+            n["output"]["support_type"] == "inferred" for n in record["nodes"]
+            if n["status"] == "succeeded") else "direct"
+        event("finished", final_node=final_node, source=source)
+
+    def validate_auto_finish_declaration(declaration, added_ids):
+        if not isinstance(declaration, dict) or set(declaration) != {"final_node", "reason"}:
+            raise ValueError("finish_after_success需要final_node和reason")
+        if declaration["final_node"] not in added_ids:
+            raise ValueError("finish_after_success.final_node必须是本次新增节点")
+        if not isinstance(declaration["reason"], str) or not declaration["reason"].strip():
+            raise ValueError("finish_after_success.reason必须说明最后关系和答案类型")
+
+    def declare_auto_finish(declaration, added_ids):
+        validate_auto_finish_declaration(declaration, added_ids)
+        if runtime.get("auto_finish_mode", "safe") == "off" or runtime.get("final_check_mode") == "always":
+            event("auto_finish_ignored", final_node=declaration["final_node"], reason="configuration")
+            return
+        planner_state["auto_finish"] = copy.deepcopy(declaration)
+        event("auto_finish_declared", **declaration)
+
+    def cancel_auto_finish(reason):
+        declaration = planner_state.pop("auto_finish", None)
+        if declaration:
+            event("auto_finish_cancelled", final_node=declaration.get("final_node"), reason=reason)
+
+    def try_auto_finish():
+        """只对未修订、全链直接证据的预声明终点自动结束；其余情况仍让planner看到真实结果。"""
+        declaration = planner_state.get("auto_finish")
+        if (not declaration or runtime.get("auto_finish_mode", "safe") != "safe"
+                or runtime.get("final_check_mode", "planner") != "planner"):
+            return False
+        final_node = declaration["final_node"]
+        by_id = {n["id"]: n for n in record["nodes"]}
+        node = by_id.get(final_node)
+        if node is None:
+            cancel_auto_finish("声明的终点不存在")
+            return False
+        if node["status"] in ("pending", "running") or jobs:
+            return False
+        if node["status"] != "succeeded":
+            cancel_auto_finish("终点执行未成功")
+            return False
+        try:
+            answer = validate_finish(final_node, record["nodes"])
+        except ValueError as exc:
+            cancel_auto_finish("图尚不满足结束条件：" + str(exc))
+            return False
+        ancestors, pending = set(), [final_node]
+        while pending:
+            key = pending.pop()
+            if key not in ancestors:
+                ancestors.add(key)
+                pending.extend(by_id[key]["depends_on"])
+        chain = [by_id[key] for key in ancestors]
+        if any(n.get("revision_count", 0) for n in chain):
+            cancel_auto_finish("最终依赖链经过修订")
+            return False
+        if any(len(n.get("attempts", [])) > 1 for n in chain):
+            cancel_auto_finish("最终依赖链发生过接管或额外复核")
+            return False
+        if any(n.get("output", {}).get("support_type") != "direct" for n in chain):
+            cancel_auto_finish("最终依赖链包含间接推断或未确认证据")
+            return False
+        review = check_finish(task, record["nodes"], final_node, clients["large"], budget,
+                              planner_decision=declaration["reason"])
+        review["method"] = "planner_precommitted" if review.get("valid") else review.get("method", "rule")
+        event("final_checked", **review)
+        planner_state.pop("auto_finish", None)
+        if not review["valid"]:
+            proposed = review.get("next_node")
+            if isinstance(proposed, dict):
+                node = commit_node(*prepare_node(proposed, record["nodes"]))
+                record["events"][-1]["source"] = "auto_finish_rule"
+                print(f"  补充最后一步 {node['id']}: {node['question']}", flush=True)
+            else:
+                reopen_final(node, "最终关系核验未通过：" + review["reason"], "auto_finish_rule")
+            return False
+        finish_record(final_node, answer, review, "planner_precommitted")
+        return True
 
     def collect_execution(future, node):
         try:
@@ -286,16 +381,29 @@ def run_task(task, clients, config, prompt, save, previous=None):
                 original_action = None
                 try:
                     response = current.result()
-                    action = parse_model_json(response["raw_response"])
+                    planner_repairs = []
+                    action = parse_model_json(response["raw_response"], planner_repairs)
+                    if planner_repairs:
+                        event("planner_protocol_repaired", repairs=planner_repairs)
                     if not isinstance(action, dict):
                         raise ValueError("规划结果必须是单个动作对象")
                     original_action = copy.deepcopy(action)
                     expand_while_running = action.pop("continue_planning", False)
                     if type(expand_while_running) is not bool:
                         raise ValueError("continue_planning必须是布尔值")
+                    finish_after_success = action.pop("finish_after_success", None)
                     kind = action.get("action")
+                    if finish_after_success is not None and kind not in ("add", "add_batch"):
+                        raise ValueError("finish_after_success只能与add或add_batch同时使用")
+                    if finish_after_success is not None and expand_while_running:
+                        raise ValueError("声明自动结束时不能同时continue_planning")
                     if kind == "add" and set(action) == {"action", "node"}:
-                        commit_node(*prepare_node(action["node"], record["nodes"]))
+                        prepared = prepare_node(action["node"], record["nodes"])
+                        if finish_after_success is not None:
+                            validate_auto_finish_declaration(finish_after_success, {prepared[0]["id"]})
+                        added = commit_node(*prepared)
+                        if finish_after_success is not None:
+                            declare_auto_finish(finish_after_success, {added["id"]})
                         waiting = False
                     elif kind == "add_batch" and set(action) == {"action", "nodes"}:
                         batch = action["nodes"]
@@ -311,10 +419,15 @@ def run_task(task, clients, config, prompt, save, previous=None):
                             prepared = prepare_node(raw, existing)
                             staged.append(prepared)
                             existing.append(dict(prepared[0], status="pending"))
+                        if finish_after_success is not None:
+                            validate_auto_finish_declaration(
+                                finish_after_success, {prepared[0]["id"] for prepared in staged})
                         # 整批验证成功后才改变真实图，失败不留下半批节点。
                         event("batch_added", count=len(batch))
                         for prepared in staged:
                             commit_node(*prepared)
+                        if finish_after_success is not None:
+                            declare_auto_finish(finish_after_success, {prepared[0]["id"] for prepared in staged})
                         waiting = False
                     elif kind == "revise" and set(action) == {"action", "node"}:
                         replacement, staged_events = prepare_node(action["node"], record["nodes"], revision=True)
@@ -389,15 +502,7 @@ def run_task(task, clients, config, prompt, save, previous=None):
                                 print(f"  补充最后一步 {node['id']}: {node['question']}", flush=True)
                             waiting = False
                         else:
-                            record["final_review"] = review
-                            record.update(status="succeeded", final_node=action["final_node"], answer=answer)
-                            record["unused_failed_nodes"] = [n["id"] for n in record["nodes"] if n["status"] == "needs_revision"]
-                            for key in record["unused_failed_nodes"]:
-                                event("failed_branch_replaced", node_id=key, final_node=action["final_node"])
-                            record["answer_support"] = "inferred" if any(
-                                n["output"]["support_type"] == "inferred" for n in record["nodes"]
-                                if n["status"] == "succeeded") else "direct"
-                            event("finished", final_node=action["final_node"])
+                            finish_record(action["final_node"], answer, review, "planner_finish")
                     elif kind == "abort" and set(action) == {"action", "reason"}:
                         if not isinstance(action["reason"], str) or not action["reason"].strip():
                             raise ValueError("abort需要明确原因")
@@ -426,6 +531,9 @@ def run_task(task, clients, config, prompt, save, previous=None):
                         record.update(status="failed", error="连续3个规划动作不合法：" + feedback)
                 persist()
             if record["status"] != "running":
+                break
+            if try_auto_finish():
+                persist()
                 break
             if prior_wall_seconds + time.perf_counter() - start >= runtime["max_task_seconds"]:
                 exhaust_budget("达到任务累计时间预算；在途调用结束后保存")

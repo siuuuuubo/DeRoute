@@ -1,10 +1,10 @@
 # DeRoute：逐步拆解与大小模型协作
 
-读取 MuSiQue 问题，让 **DeepSeek V4 Pro 增量提出必要子任务，每批最多 3 个**，由代码检查依赖、选择执行模型并调度。子任务的真实答案回传给拆解器，决定下一步，最终形成可追踪中间结果的任务流。默认执行完当前批次才继续规划，避免调用大模型等待结果；数据集运行默认并发处理 4 题，让本地 Qwen 与其他题的大模型请求重叠。
+读取 MuSiQue 问题，让 **DeepSeek Flash 增量提出必要子任务，每批最多 3 个**，由代码检查依赖、选择执行模型并调度。子任务的真实答案回传给拆解器，决定下一步，最终形成可追踪中间结果的任务流。默认执行完当前批次才继续规划，避免调用大模型等待结果；数据集运行默认并发处理 4 题，让本地 Qwen 与其他题的大模型请求重叠。
 
 当前调用量优化、验证结果及运行方式见 [CALL_REDUCTION.md](CALL_REDUCTION.md)，项目交接见 [HANDOFF.md](HANDOFF.md)。
 
-30 条示例来自 [musique_train_30shot_decomposition.txt](data_prompts/musique_train_30shot_decomposition.txt)。每次规划都携带这些示例，这是上下文学习，不会训练或更新模型参数。新版实验抽样测得 DeepSeek prompt 前缀缓存命中率 95.3%，因此默认保留 30-shot；可变任务状态继续放在固定前缀之后。
+30 条示例来自 [musique_train_30shot_decomposition.txt](data_prompts/musique_train_30shot_decomposition.txt)。每次规划都携带这些示例，这是上下文学习，不会训练或更新模型参数。新版实验抽样测得 DeepSeek prompt 前缀缓存命中率 95.3%（该抽样基于 `deepseek-v4-pro`），因此默认保留 30-shot；可变任务状态继续放在固定前缀之后。自 2026-09-11 起远程大模型已切换为 `deepseek-flash`，其缓存命中率需重新测量。
 
 ## 运行
 
@@ -28,11 +28,15 @@ bash agent.sh run.py run --all --live --output outputs/experiment --resume
 
 # 同批100题；默认同时处理4题，也可以显式指定
 bash agent.sh run.py run --input outputs/parallel100_subset.jsonl --all --live \
-  --output outputs/devtest_random100_v3 --task-workers 4
+  --output outputs/devtest_random100_flash_v4 --task-workers 4
 
 # 延迟优先的路由消融：仅在同一任务存在并行前沿时使用小模型
 bash agent.sh run.py run --input outputs/parallel100_subset.jsonl --all --live \
-  --output outputs/devtest_random100_v3_parallel_only --small-route-mode parallel_only
+  --output outputs/devtest_random100_flash_v4_parallel_only --small-route-mode parallel_only
+
+# 终点预声明消融：保留其他配置，关闭安全自动结束
+bash agent.sh run.py run --input outputs/parallel100_subset.jsonl --all --live \
+  --output outputs/devtest_random100_flash_v4_no_auto_finish --auto-finish-mode off
 
 # 离线测试，不调用真实模型
 bash agent.sh -m unittest discover -s tests -v
@@ -41,13 +45,13 @@ bash agent.sh -m unittest discover -s tests -v
 bash agent.sh evaluate.py --predictions outputs/experiment/workflows.jsonl --gold data_ori/musique_ans_v1.0_dev.jsonl --output outputs/experiment/evaluation.json
 ```
 
-`--input` 接受 JSONL 文件或目录，默认 `data_test/`。`--id` 可重复传入，与 `--limit`、`--all` 互斥。`decompose` 是 `run` 的别名，也会执行子任务。`--task-workers` 控制跨任务并发，默认 4；远程 API 仍受 `large.max_concurrent=2` 限制，本地 Qwen 仍由单 GPU 锁串行执行。
+`--input` 接受 JSONL 文件或目录，默认 `data_test/musique_ans_v1.0_dev_test.jsonl`。`data_test/` 还含有一份与主文件 ID 重叠的并行子集，因此不应把整个目录作为默认实验输入。`--id` 可重复传入，与 `--limit`、`--all` 互斥。`decompose` 是 `run` 的别名，也会执行子任务。`--task-workers` 控制跨任务并发，默认 4；`--auto-finish-mode off` 可关闭终点预声明做消融。远程 API 仍受 `large.max_concurrent=2` 限制，本地 Qwen 仍由单 GPU 锁串行执行。
 
 已有输出时需要 `--resume`。想重新实验，用 `--output outputs/experiment2`。模型配置或提示词变化后，需要使用新输出目录，避免混用不同实验。所有输出必须位于 DeRoute 内。
 
 ## 如何拆解
 
-拆解器每次只允许一个动作：`add` 添加节点、`add_batch` 添加有限批次、`revise` 修订节点、`wait` 等待在途结果、`finish` 核验并结束、`abort` 说明无法恢复的原因。默认由代码等待执行结果；超过批次上限的整份计划会被拒绝。批次全部通过校验才提交，错误反馈给下一次规划，连续 3 次不合法则保存原因并结束任务。
+拆解器每次只允许一个动作：`add` 添加节点、`add_batch` 添加有限批次、`revise` 修订节点、`wait` 等待在途结果、`finish` 核验并结束、`abort` 说明无法恢复的原因。默认由代码等待执行结果；超过批次上限的整份计划会被拒绝。批次全部通过校验才提交，错误反馈给下一次规划，连续 3 次不合法则保存原因并结束任务。已确定的符号依赖链可一批提交；必须看到上游实际实体才能消歧的步骤仍保持单步规划。
 
 ```json
 {
@@ -62,6 +66,19 @@ bash agent.sh evaluate.py --predictions outputs/experiment/workflows.jsonl --gol
   }
 }
 ```
+
+如果新节点已确定是原题的最后一跳，planner 可在同一个 `add` 或 `add_batch` 动作中加入：
+
+```json
+{
+  "finish_after_success": {
+    "final_node": "n2",
+    "reason": "n2完成原题最后的出生地关系，输出是地点"
+  }
+}
+```
+
+`runtime.auto_finish_mode="safe"` 只在最终依赖链均为直接证据、未修订、未发生小模型接管或额外复核且图已完整时自动结束，从而省去只用于返回 `finish` 的下一次 planner 调用。任一条件不满足时，声明会被取消，planner 继续读取真实结果。设为 `off` 可做消融对照。
 
 `#1` 指 n1 的实际答案。执行前，代码将它替换成人名，同时传入 n1 的答案、证据和解释。模型只回答当前子问题，同时接收原问题作为消歧上下文。代码从明确的 `#k` 引用生成 `depends_on`；只能指向已创建或同批较早的节点，不能猜测上游答案。添加时省略的 id 也由代码顺序填写。
 
@@ -112,11 +129,11 @@ flowchart LR
 | Qwen 证据不足、输出不合法、输入超过 2400 Token 或调用失败 | DeepSeek 接管并检查保留的候选 |
 | Qwen 给出间接推断 | DeepSeek 复核后才可接受 |
 
-Qwen 接收词项检索排名前 3 个命中段落；检索对稀有词加权，优先保留完整标题实体匹配。仅在检索时折叠重音以匹配人名、地名，原始 Unicode 文本保持不变。被压平的日期比赛表在模型输入中恢复行界，引用仍对照原始段落校验。DeepSeek 执行时接收该样本的全部候选段落。检索不使用支持段落标签。
+Qwen 首先保留词项检索排名前 3 个命中段落；在 6000 字符上下文预算内会自适应扩展到最多 5 个，不增加一次 Qwen 调用。检索对稀有词加权，优先保留完整标题实体匹配。仅在检索时折叠重音以匹配人名、地名，原始 Unicode 文本保持不变。被压平的日期比赛表在模型输入中恢复行界，引用仍对照原始段落校验。DeepSeek 执行时接收该样本的全部候选段落。检索不使用支持段落标签。
 
 `routing.small_route_mode="cost"` 是默认值：所有符合规则的简单 lookup 仍交给 Qwen，以减少大模型 API 调用。`parallel_only` 是延迟优先的对照模式：纯串行位置直接使用 DeepSeek，只在同一任务至少有两个可并行执行节点时启用一个 Qwen 节点，并把另一个节点交给大模型形成真实重叠。后者会减少小模型调用和串行等待，但会增加大模型调用，因此没有设为当前“减少 API 调用”目标的默认值。
 
-执行结果有七个字段：`status`、`answer`、`evidence`、`used_inputs`、`reason`、`support_type`、`assumptions`。`used_inputs` 由代码按实际传入的依赖确定并记录元数据修复，避免因漏写引用列表升级到大模型；这表示传入了哪些依赖，不证明模型的语义推理正确。证据段落必须确实提供过，摘录必须能在原文中找到。完整 JSON 外侧的 Markdown 围栏可以去除，重复字段、截断和非有限数字仍被拒绝。
+执行结果有七个字段：`status`、`answer`、`evidence`、`used_inputs`、`reason`、`support_type`、`assumptions`。`used_inputs` 由代码按实际传入的依赖确定并记录元数据修复，避免因漏写引用列表升级到大模型；这表示传入了哪些依赖，不证明模型的语义推理正确。证据段落必须确实提供过，摘录必须能在原文中找到。完整 JSON 外侧的 Markdown 围栏、BOM 或一层说明文本可以确定性去除，重复字段、单引号、截断和非有限数字仍被拒绝。
 
 `support_type=direct` 表示关系由材料直接支持；直接事实提取答案还须以完整词项出现在引用中或等于上游答案；列表答案的每一项都需要对应证据。`inferred` 表示使用了间接关系、背景知识或额外假设，必须在 `assumptions` 中明确列出；不是因为答案词出现在材料中就认定关系成立。`insufficient` 可以保留未验证候选，供后续复核使用。
 
@@ -138,11 +155,13 @@ Qwen 接收词项检索排名前 3 个命中段落；检索对稀有词加权，
 
 模型连接集中在 `model.json`：
 
-- 大模型：`deepseek-v4-pro`，通过 Chat Completions API 调用；从配置指定的 `env_file`（当前 `.env`）读取地址和密钥，现有进程环境变量优先。配置和输出不保存密钥值。
-- 小模型：已有的 `../models/Qwen2.5-7B-Instruct`，由 Transformers 在本机加载，当前 `load_in_4bit=false`，进程内只加载一次。支持改为 4 bit NF4，需相应 CUDA 和 `bitsandbytes` 依赖。本次未调整推理精度或路由阈值。
+- 大模型：`deepseek-flash`（2026-09-11 前为 `deepseek-v4-pro`；仓库内已有的实验结果均由 v4-pro 产出，不可混用），通过 Chat Completions API 调用；从配置指定的 `env_file`（当前 `.env`）读取地址和密钥，现有进程环境变量优先。配置和输出不保存密钥值。
+- 小模型：已有的 `../models/Qwen2.5-7B-Instruct`，由 Transformers 在本机加载，保持 `load_in_4bit=false`，进程内只加载一次，可在 RTX 5090 上使用原精度/自动精度。本次没有引入量化。
 - `agent.sh` 关闭在线模型下载，将运行缓存和临时文件放在 DeRoute 内。模型权重及兄弟项目只读。
 
-API 响应中的 `prompt_cache_hit_tokens` 和 `prompt_cache_miss_tokens` 会保留在每次调用、工作流 `metrics` 及 `compare_runs.py` 汇总中。缓存数据缺失时命中率记为未知，不把它误当作未命中。跨任务并发后的实际整批耗时写入 `run_metrics.json`，续跑累加到 `cumulative_batch_wall_seconds`；各任务 `wall_seconds` 之和会包含并发重叠，不能当作整批墙钟。
+API 响应中的 `prompt_cache_hit_tokens` 和 `prompt_cache_miss_tokens` 会保留在每次调用、工作流 `metrics` 及 `compare_runs.py` 汇总中。大模型默认对 408/429/5xx 和网络错误最多重试 2 次，使用带抖动的指数退避；402 不在请求层重试。`calls` 是逻辑调用，`physical_requests`/`request_attempts` 是包含重试的实际请求数。`queue_wait_seconds`、`service_seconds` 和 `retry_sleep_seconds` 分别记录限流排队、模型服务和退避等待；Qwen 也分开记录 GPU 锁等待与真实推理时间。
+
+`large.purpose_max_tokens` 按用途限制输出：planner 384、answer/review 512、final check 384。全局 `max_tokens=1024` 是未匹配用途的后备上限。这些上限用于防止异常长输出，不会减少输入 token 或逻辑调用数。缓存数据缺失时命中率记为未知。跨任务并发后的实际整批耗时写入 `run_metrics.json`，续跑累加到 `cumulative_batch_wall_seconds`；各任务 `wall_seconds` 之和会包含并发重叠，不能当作整批墙钟。
 
 如已有本机兼容 API 的 Qwen 服务，可将 `small` 替换为以下配置，并设置服务所需的 `QWEN_API_KEY` 环境变量；模型名应与服务一致：
 
@@ -160,17 +179,17 @@ API 响应中的 `prompt_cache_hit_tokens` 和 `prompt_cache_miss_tokens` 会保
 - `events`：创建、开始、结束和等待的时间线；`layers` 是依赖层级，层级相同不代表实际同时执行。
 - `revisions` 保存修订前的节点及尝试，`invalidations` 保存因上游改动而失效的后代记录；`stage=review` 表示候选复核，`stage=final_review` 保存最终核验拒绝的答案，`final_checked` 是原题范围核验事件。
 - `unused_failed_nodes` 和 `failed_branch_replaced` 记录已被完整新链替代的失败旁支；其候选不参与最终答案及证据类型统计。
-- `calls/metrics`：规划、小模型、大模型的调用次数、响应、Token 和耗时。调用耗时包含等待及首次本地加载，不能相加当作整体耗时；总耗时见 `wall_seconds`。
+- `calls/metrics`：规划、小模型、大模型的逻辑调用、实际请求、响应、Token、排队和服务耗时。并发时分项耗时不能相加当作整体耗时；总耗时见 `wall_seconds`。
 
 不生成 HTML 或报告脚本。首次联调的两条失败记录保留在 `outputs/initial_attempt.jsonl`，便于核对修复前后的差异。
 
 每任务默认限 12 个节点、每节点 2 次且整题 3 次修订、24 次累计规划、48 次累计模型调用和 600 秒累计运行时间。总调用包含失败、升级、复核、最终核验及重跑。预算耗尽会终止该题，并继续处理后续样本；HTTP 402/408/429、服务端或无状态码的模型异常会保存并暂停。已发出的调用等待完成或接口超时后保存，因此实际耗时可能超过时间预算。Ctrl+C 同样保留结果。
 
-`--resume` 跳过已成功及已终止的失败样本，仅恢复暂停/中断任务，每个任务优先使用自己的最新快照。预算不会重置；已有候选、执行阶段、错误反馈和历史调用保留，中断的大模型接管或复核不会先重跑小模型。输出目录有进程锁，快照原子写入，恢复时可修复 JSONL 最后一行写到一半的情况；最终快照尚未追加时会补记日志。当前协议版本为 11，旧版实验不能直接续跑，请使用新的输出目录。
+`--resume` 跳过已成功及已终止的失败样本，仅恢复暂停/中断任务，每个任务优先使用自己的最新快照。预算不会重置；已有候选、执行阶段、错误反馈和历史调用保留，中断的大模型接管或复核不会先重跑小模型。输出目录有进程锁，快照原子写入，恢复时可修复 JSONL 最后一行写到一半的情况；最终快照尚未追加时会补记日志。当前协议版本为 12，旧版实验不能直接续跑，请使用新的输出目录。
 
-## 调用量优化验证（2026-09-10）
+## 调用量优化验证（2026-09-11）
 
-conda `agent` 中 **94 项离线测试通过**，覆盖调用次数、批量原子性、并行依赖、跨任务并发与独立检查点、累计预算、整题修订上限、缓存统计、旧日志兼容、路由模式和多次中断恢复。同一个模拟分支任务中，旧版 11 次调用、新版 6 次；这不是实际 MuSiQue 的准确率或速度结果。配置、对照结果和新实验命令见 [CALL_REDUCTION.md](CALL_REDUCTION.md)。
+conda `agent` 中 **100 项离线测试通过**，覆盖调用次数、安全自动结束、批量原子性、退避重试与物理请求统计、自适应小模型检索、跨任务并发、累计预算、缓存统计和多次中断恢复。新增的确定性两跳用例中，预声明最终节点将 planner 从 2 次降为 1 次、总调用从 4 次降为 3 次。这不是实际 MuSiQue 的准确率或速度结果。配置、对照结果和新实验命令见 [CALL_REDUCTION.md](CALL_REDUCTION.md)。
 
 ## 历史修复验证（2026-09-09，非本轮调用量优化结果）
 

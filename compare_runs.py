@@ -43,6 +43,7 @@ def workload(path):
     calls = Counter()
     roles = Counter()
     usage = Counter()
+    transport = Counter()
     wait_calls = 0
     for r in records.values():
         for c in r.get("calls", []):
@@ -50,8 +51,16 @@ def workload(path):
             role = "planner" if purpose == "planner" else purpose.split(":", 1)[0]
             calls[role] += 1
             roles["small" if purpose.endswith(":small") else "large"] += 1
+            response = c.get("response") or {}
+            attempts = response.get("request_attempts", 1)
+            request_role = "small" if purpose.endswith(":small") else "large"
+            transport[request_role + "_requests"] += attempts if type(attempts) is int and attempts > 0 else 1
+            for key in ("queue_wait_seconds", "service_seconds", "retry_sleep_seconds"):
+                value = response.get(key, 0)
+                if type(value) in (int, float) and value >= 0:
+                    transport[key] += value
             if not purpose.endswith(":small"):
-                for key, value in ((c.get("response") or {}).get("usage") or {}).items():
+                for key, value in (response.get("usage") or {}).items():
                     if key in ("prompt_tokens", "completion_tokens", "total_tokens",
                                "prompt_cache_hit_tokens", "prompt_cache_miss_tokens") and type(value) is int:
                         usage[key] += value
@@ -79,6 +88,10 @@ def workload(path):
             "planner_calls": calls.get("planner", 0),
             "execute_calls": sum(v for k, v in calls.items() if k != "planner"),
             "model_calls": sum(calls.values()), "large_calls": roles["large"], "small_calls": roles["small"],
+            "large_requests": transport["large_requests"], "small_requests": transport["small_requests"],
+            "queue_wait_seconds": round(transport["queue_wait_seconds"], 1),
+            "service_seconds": round(transport["service_seconds"], 1),
+            "retry_sleep_seconds": round(transport["retry_sleep_seconds"], 1),
             "verify_calls": calls["verify"], "final_check_calls": calls["final_check"],
             "planner_wait_calls": wait_calls,
             "planner_rejections": sum(e["type"] == "planner_rejected" for r in records.values() for e in r.get("events", [])),
@@ -118,10 +131,14 @@ def main(argv=None):
     print("-" * 78)
     for key, label in [("tasks", "去重任务数"), ("wall_seconds", "各任务耗时之和(s)"),
                        ("model_calls", "全部模型调用数"), ("large_calls", "大模型调用数"),
-                       ("small_calls", "小模型调用数"), ("planner_calls", "规划调用数"),
+                       ("small_calls", "小模型调用数"), ("large_requests", "大模型HTTP请求数"),
+                       ("small_requests", "小模型实际请求数"), ("planner_calls", "规划调用数"),
                        ("planner_wait_calls", "规划wait调用数"), ("planner_rejections", "非法规划动作数"),
                        ("execute_calls", "非规划调用数"), ("verify_calls", "推断复核调用数"),
                        ("final_check_calls", "独立终检调用数"),
+                       ("queue_wait_seconds", "请求排队时间(s)"),
+                       ("service_seconds", "模型服务时间(s)"),
+                       ("retry_sleep_seconds", "重试退避时间(s)"),
                        ("prompt_tokens", "大模型输入token"),
                        ("prompt_cache_hit_tokens", "缓存命中token"),
                        ("prompt_cache_miss_tokens", "缓存未命中token")]:

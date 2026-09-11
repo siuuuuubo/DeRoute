@@ -108,15 +108,31 @@ def rank_paragraphs(question, paragraphs):
     return sorted(ranked, key=lambda item: (-item[0], item[1]["idx"]))
 
 
-def route_node(node, question, upstream, paragraphs, config, locked=None, *, allow_small=True):
-    # 拆解时锁定的证据段落优先；索引失效则回退到词项检索，绝不因坏索引崩溃。
+def select_small_paragraphs(question, upstream, paragraphs, config, locked=None):
+    """先保留small_top_k；若候选材料仍在小模型字符预算内，最多扩展到small_max_top_k。"""
     by_idx = {p["idx"]: p for p in paragraphs}
     if locked:
-        selected = [by_idx[i] for i in locked if i in by_idx]
-        if not selected:
-            selected = [p for score, p in rank_paragraphs(question, paragraphs)[:config["small_top_k"]] if score > 0]
-    else:
-        selected = [p for score, p in rank_paragraphs(question, paragraphs)[:config["small_top_k"]] if score > 0]
+        return [by_idx[i] for i in locked if i in by_idx]
+    ranked = [p for score, p in rank_paragraphs(question, paragraphs) if score > 0]
+    base_k = config["small_top_k"]
+    max_k = max(base_k, config.get("small_max_top_k", base_k))
+    selected = ranked[:base_k]
+    size = len(question) + sum(len(x["answer"]) for x in upstream.values())
+    size += sum(len(p["title"]) + len(p["paragraph_text"]) for p in selected)
+    for paragraph in ranked[base_k:max_k]:
+        added = len(paragraph["title"]) + len(paragraph["paragraph_text"])
+        if size + added > config["small_max_context_chars"]:
+            break
+        selected.append(paragraph)
+        size += added
+    return selected
+
+
+def route_node(node, question, upstream, paragraphs, config, locked=None, *, allow_small=True):
+    # 拆解时锁定的证据段落优先；索引失效则回退到词项检索，绝不因坏索引崩溃。
+    selected = select_small_paragraphs(question, upstream, paragraphs, config, locked)
+    if locked and not selected:
+        selected = select_small_paragraphs(question, upstream, paragraphs, config)
     size = sum(len(p["title"]) + len(p["paragraph_text"]) for p in selected)
     size += len(question) + sum(len(x["answer"]) for x in upstream.values())
     if node.get("resume_role") == "large":
@@ -216,12 +232,16 @@ def failure_context(node):
 
 
 def decode_answer(response, upstream, attempt):
-    value = parse_model_json(response["raw_response"])
+    repairs = []
+    value = parse_model_json(response["raw_response"], repairs)
     if isinstance(value, dict) and value.get("used_inputs") != list(upstream):
         # 引用来自已执行的输入替换，不能因模型漏写确定的元数据而再调用一次模型。
-        attempt["protocol_repairs"] = [{"field": "used_inputs", "original": value.get("used_inputs"),
-                                         "replacement": list(upstream)}]
+        attempt.setdefault("protocol_repairs", []).append(
+            {"field": "used_inputs", "original": value.get("used_inputs"),
+             "replacement": list(upstream)})
         value["used_inputs"] = list(upstream)
+    if repairs:
+        attempt.setdefault("protocol_repairs", []).extend(repairs)
     return value
 
 
