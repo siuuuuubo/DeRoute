@@ -1,0 +1,311 @@
+你是复杂问题拆解器。下面是从 MuSiQue 训练集抽取的 30 个拆解示例，用于学习多跳问题如何形成有依赖关系的子问题。
+
+使用说明：
+1. 本文件作为 few-shot 示例块，使用时应与主拆解指令组合；调用方规定的最终输出格式仍然优先。
+2. 每个示例包含复杂问题、标准子问题和示例答案。示例答案只用于说明 #1、#2 等引用如何传递中间结果。
+3. 处理新问题时只生成拆解计划，不回答子问题，不输出示例答案，也不照抄示例中的实体。
+4. #k 表示第 k 个子问题的执行结果；引用它的步骤必须依赖该步骤。
+5. 保留原问题的约束，把每一步写成可以独立执行的明确问题；不要编造资料中没有的事实。
+6. 除明确的 #k 引用外，子问题不得使用 the writer、they、this season 等依赖原问题才能理解的指代；应直接写出实体名称或必要限定信息。
+
+
+示例 01（2 跳，源 ID：2hop__531536_126045）
+复杂问题：Who was in charge in the city where İsmail Keleş was born?
+标准拆解：
+  #1 子问题：İsmail Keleş >> place of birth
+     示例答案：Ankara
+  #2 子问题：Who was in charge of #1 ?
+     示例答案：Melih Gökçek
+
+示例 02（2 跳，源 ID：2hop__59478_89360）
+复杂问题：Who sings Mack the Knife with the artist who popularized the song High Hopes?
+标准拆解：
+  #1 子问题：where did the song high hopes come from
+     示例答案：Frank Sinatra
+  #2 子问题：who sings mack the knife with #1
+     示例答案：Quincy Jones
+
+示例 03（2 跳，源 ID：2hop__131644_55630）
+复杂问题：What was the 2013 governor salary in the state where Pocahontas Mounds are found?
+标准拆解：
+  #1 子问题：Which state is Pocahontas Mounds located?
+     示例答案：Mississippi
+  #2 子问题：what is the salary of the governor of #1
+     示例答案：$122,160
+
+示例 04（2 跳，源 ID：2hop__852082_829081）
+复杂问题：Of which county is the city where Francis Raymond Shea lives the seat?
+标准拆解：
+  #1 子问题：Francis Raymond Shea >> residence
+     示例答案：Knoxville
+  #2 子问题：#1 >> capital of
+     示例答案：Knox County
+
+示例 05（2 跳，源 ID：2hop__158048_62309）
+复杂问题：When did the US go to war with the country taekwondo originated from?
+标准拆解：
+  #1 子问题：Where was taekwondo originally from?
+     示例答案：Korea
+  #2 子问题：when did the us go to war with #1
+     示例答案：the Battle of Osan
+
+示例 06（2 跳，源 ID：2hop__158048_79459）
+复杂问题：Why was the country where taekwondo is originally from divided at the 38th parallel at the end of WW2?
+标准拆解：
+  #1 子问题：Where was taekwondo originally from?
+     示例答案：Korea
+  #2 子问题：why was #1 divided at the 38th parallel at the end of wwii
+     示例答案：it divided the country approximately in half
+
+示例 07（2 跳，源 ID：2hop__103771_71774）
+复杂问题：What is the age limit for NYSC in the country where Harrysong is from?
+标准拆解：
+  #1 子问题：Where was Harrysong from?
+     示例答案：Nigeria
+  #2 子问题：what is the age limit for nysc in #1
+     示例答案：thirty
+
+示例 08（2 跳，源 ID：2hop__377887_64689）
+复杂问题：What California county contains the birthplace of Arlene B. Arcillas?
+标准拆解：
+  #1 子问题：Arlene B. Arcillas >> place of birth
+     示例答案：Santa Rosa
+  #2 子问题：what part of california is #1 in
+     示例答案：Sonoma County
+
+示例 09（2 跳，源 ID：2hop__842212_82000）
+复杂问题：What is the population of Williston in the state where KCAD is based?
+标准拆解：
+  #1 子问题：KCAD >> located in the administrative territorial entity
+     示例答案：North Dakota
+  #2 子问题：what is the population of williston #1
+     示例答案：26,977
+
+示例 10（2 跳，源 ID：2hop__436455_160012）
+复杂问题：What year did the cast member of Tip Top win best actress?
+标准拆解：
+  #1 子问题：Tip Top >> cast member
+     示例答案：Isabelle Huppert
+  #2 子问题：What year did #1 win best Actress?
+     示例答案：2001
+
+示例 11（3 跳，源 ID：3hop1__157791_1887_50817）
+复杂问题：What is the latest season of the Real Housewives series set in the state that, along with the state where Amalie Schoppe died, contains Ellis Island?
+标准拆解：
+  #1 子问题：In what state did Amalie Schoppe die?
+     示例答案：New York
+  #2 子问题：Ellis Island is considered in #1 state and which other?
+     示例答案：New Jersey
+  #3 子问题：what is the latest season of the real housewives of #2
+     示例答案：eighth
+
+示例 12（3 跳，源 ID：3hop1__69901_548096_527472）
+复杂问题：What mountain range is the range that Norris Mountain is part of in the state Yellowstone is set part of?
+标准拆解：
+  #1 子问题：where is the show yellowstone supposed to be
+     示例答案：Montana
+  #2 子问题：Norris Mountain (#1 ) >> part of
+     示例答案：Lewis Range
+  #3 子问题：#2 >> part of
+     示例答案：Rocky Mountains
+
+示例 13（3 跳，源 ID：3hop1__457260_544161_63634）
+复杂问题：Which organ of the organization of which the country where Talas can be found is a member has suspended its operations since 1994?
+标准拆解：
+  #1 子问题：Talas >> country
+     示例答案：Kyrgyzstan
+  #2 子问题：#1 >> member of
+     示例答案：United Nations
+  #3 子问题：which organ of #2 has suspended its operations since 1994
+     示例答案：United Nations Trusteeship Council
+
+示例 14（3 跳，源 ID：3hop1__61028_43572_372338）
+复杂问题：Where is the headquarters of the owner of the Roosevelt Hotel in the city with the biggest population in the US?
+标准拆解：
+  #1 子问题：what city has the biggest population in the united states
+     示例答案：New York
+  #2 子问题：who owns the roosevelt hotel in #1
+     示例答案：Pakistan International Airlines
+  #3 子问题：#2 >> headquarters location
+     示例答案：Jinnah International Airport
+
+示例 15（3 跳，源 ID：3hop1__291586_715233_43805）
+复杂问题：What is the country in the middle of the body of water Teafuone is located?
+标准拆解：
+  #1 子问题：Teafuone >> part of
+     示例答案：Nukufetau
+  #2 子问题：#1 >> located in or next to body of water
+     示例答案：Pacific Ocean
+  #3 子问题：country in the middle of #2
+     示例答案：Caroline Islands
+
+示例 16（3 跳，源 ID：3hop1__313385_280480_194644）
+复杂问题：What county borders another county, that itself shares a border with a third county, where Mineral Township is found?
+标准拆解：
+  #1 子问题：Mineral Township >> located in the administrative territorial entity
+     示例答案：Barry County
+  #2 子问题：#1 >> shares border with
+     示例答案：Lawrence County
+  #3 子问题：#2 >> shares border with
+     示例答案：Maury County
+
+示例 17（3 跳，源 ID：3hop2__11799_128611_41384）
+复杂问题：Based on population, what is the ranking of the city WOKV is located in the country that won the battle?
+标准拆解：
+  #1 子问题：Which country won the Battle of El Bracito?
+     示例答案：The United States
+  #2 子问题：What city is WOKV located?
+     示例答案：Jacksonville
+  #3 子问题：Based on population alone, what is #2 's ranking in #1 ?
+     示例答案：12th
+
+示例 18（3 跳，源 ID：3hop1__161080_158722_93820）
+复杂问题：When did the country compared to a stringed agent as a lion is to the country to which Queen Margaret and her son travelled gain its independence from England?
+标准拆解：
+  #1 子问题：Where did Queen Margaret and her son travel?
+     示例答案：Scotland
+  #2 子问题：A lion is to #1 as a stringed agent is to?
+     示例答案：Ireland
+  #3 子问题：when did #2 gain its independence from england
+     示例答案：1922
+
+示例 19（3 跳，源 ID：3hop1__22731_56765_148411）
+复杂问题：What is the position of the minister to the country concerned with Russia capturing Constantinople who negotiated a treaty in 1795?
+标准拆解：
+  #1 子问题：Who was concerned with Russia capturing Constantinople?
+     示例答案：Britain
+  #2 子问题：minister to #1 who negotiated a treaty in 1795
+     示例答案：John Jay
+  #3 子问题：What is the position of #2 ?
+     示例答案：Chief Justice of the United States
+
+示例 20（3 跳，源 ID：3hop1__223238_715836_26008）
+复杂问题：How many square miles is the urban area of Sky Street's performer's birthplace?
+标准拆解：
+  #1 子问题：Sky Street >> performer
+     示例答案：Kenny Burrell
+  #2 子问题：#1 >> place of birth
+     示例答案：Detroit
+  #3 子问题：How many square miles is is #2 's urban area?
+     示例答案：1,337 square miles
+
+示例 21（4 跳，源 ID：4hop1__38130_8966_31714_48057）
+复杂问题：When did the country that recognized Gaddafi's government at an early date along with the country where a president was previously Eisenhower's Vice President start selling petrol in litres?
+标准拆解：
+  #1 子问题：Who served as Eisenhower's vice president?
+     示例答案：Nixon
+  #2 子问题：#1 was a president of what country?
+     示例答案：U.S.
+  #3 子问题：Along with the #2 , what major power recognized Gaddafi's government at an early date?
+     示例答案：U.K.
+  #4 子问题：when did #3 start selling petrol in litres
+     示例答案：1976
+
+示例 22（4 跳，源 ID：4hop1__189405_715233_91861_124556）
+复杂问题：Who fathered the person who led the first expedition to reach Asia by sailing west across the ocean containing the atoll that Faiava Lasi is part of?
+标准拆解：
+  #1 子问题：Faiava Lasi >> part of
+     示例答案：Nukufetau
+  #2 子问题：#1 >> located in or next to body of water
+     示例答案：Pacific Ocean
+  #3 子问题：who led the first expedition to reach asia by sailing west across #2
+     示例答案：Vasco da Gama
+  #4 子问题：Who fathered #3 ?
+     示例答案：Estêvão da Gama
+
+示例 23（4 跳，源 ID：4hop3__3157_3356_32417_24628）
+复杂问题：When did voters from the state the most successful American Idol contestant this season is from once again vote for someone from the party that dominated South Carolina's legislature?
+标准拆解：
+  #1 子问题：Who was the most successful recording artist from the fifth season of American Idol?
+     示例答案：Chris Daughtry
+  #2 子问题：What state is American Idol contestant #1 from?
+     示例答案：North Carolina
+  #3 子问题：Which party dominated South Carolina's state legislature?
+     示例答案：Democrat
+  #4 子问题：What year did #2 voters once again vote for a #3 ?
+     示例答案：2008
+
+示例 24（4 跳，源 ID：4hop3__43051_38788_25582_21116）
+复杂问题：How many people with the name others once used to call new students live in the country discovered by the colonizer of Angola and Mozambique?
+标准拆解：
+  #1 子问题：angola and mozambique were once colonies of which country
+     示例答案：Portugal
+  #2 子问题：What South American country did #1 discover?
+     示例答案：Brazil
+  #3 子问题：What name did fellow Collegers at Eton College once use for new admissions?
+     示例答案：'Jews'
+  #4 子问题：How many #3 live in #2 ?
+     示例答案：196,000-600,000
+
+示例 25（4 跳，源 ID：4hop3__360282_544708_764770_54023）
+复杂问题：When did the first restaurant that McDonaldization is named after open in the country of citizenship of the author of Doctrine and Discipline of Divorce?
+标准拆解：
+  #1 子问题：Doctrine and Discipline of Divorce >> author
+     示例答案：John Milton
+  #2 子问题：#1 >> country of citizenship
+     示例答案：England
+  #3 子问题：McDonaldization >> named after
+     示例答案：McDonald's
+  #4 子问题：when did the first #3 open in #2
+     示例答案：1974
+
+示例 26（4 跳，源 ID：4hop3__581464_280480_160165_606586）
+复杂问题：In which country is Logan, a city in the county sharing a border with Kings Prairie Township's county in the state where the largest ancestry group is German?
+标准拆解：
+  #1 子问题：Kings Prairie Township >> located in the administrative territorial entity
+     示例答案：Barry County
+  #2 子问题：#1 >> shares border with
+     示例答案：Lawrence County
+  #3 子问题：Where is German the largest ancestry group?
+     示例答案：Missouri
+  #4 子问题：Logan, #2 , #3 >> country
+     示例答案：U.S.
+
+示例 27（4 跳，源 ID：4hop3__29341_30907_11988_24628）
+复杂问题：What year did the voters from the state a Senator that John Kerry chose as his running mate represents vote again for the party Mayor Turner aligns with?
+标准拆解：
+  #1 子问题：Who did John Kerry choose to be by his side as the potential Vice President?
+     示例答案：John Edwards
+  #2 子问题：Where was #1 a senator?
+     示例答案：North Carolina
+  #3 子问题：To what political party is Sylvester Turner aligned?
+     示例答案：Democrat
+  #4 子问题：What year did #2 voters once again vote for a #3 ?
+     示例答案：2008
+
+示例 28（4 跳，源 ID：4hop3__147221_362455_28338_160498）
+复杂问题：What are the biggest terrorist attacks by the group with which Bush said the war on terror begins against the country where Henry Benbridge lived when he died?
+标准拆解：
+  #1 子问题：Where did Henry Benbridge live when he died?
+     示例答案：Philadelphia
+  #2 子问题：Federal Detention Center, #1 >> country
+     示例答案：the United States
+  #3 子问题：With which group did President George W. Bush say the 'war on terror' begins?
+     示例答案：with al-Qaeda
+  #4 子问题：what is the biggest terrorist attacks by the Islamic terrorist group #3 against #2
+     示例答案：the 9/11 attacks
+
+示例 29（4 跳，源 ID：4hop2__339729_20606_51791_85837）
+复杂问题：When did the US and Britain invade the country that seized the country Al-Berka is located from the empire the Gallipoli Campaign fought against?
+标准拆解：
+  #1 子问题：Al-Berka >> country
+     示例答案：Libya
+  #2 子问题：The Gallipoli Campaign fought against which country?
+     示例答案：the Ottoman Empire
+  #3 子问题：which european state seized #1 from #2 in 1911
+     示例答案：Italy
+  #4 子问题：when did the us and britain invade #3
+     示例答案：3 September 1943
+
+示例 30（4 跳，源 ID：4hop1__29341_30907_482320_707201）
+复杂问题：What was the place containing the community Lone Hickory in the state where the senator chosen by John Kerry as his Vice Presidential candidate hails named after?
+标准拆解：
+  #1 子问题：Who did John Kerry choose to be by his side as the potential Vice President?
+     示例答案：John Edwards
+  #2 子问题：Where was #1 a senator?
+     示例答案：North Carolina
+  #3 子问题：Lone Hickory, #2 >> located in the administrative territorial entity
+     示例答案：Yadkin County
+  #4 子问题：#3 >> named after
+     示例答案：Yadkin River
+

@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.DS_Store
+.env
+.tmp/
+.cache/
+outputs/
+
+# MuSiQue training sets are hundreds of MiB and exceed GitHub's file limit.
+# Keep local copies for prompt/data preparation, but do not commit them.
+data/*train*.jsonl
+data_ori/*train*.jsonl

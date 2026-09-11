@@ -1,0 +1,39 @@
+{
+  "env_file": ".env",
+  "large": {
+    "provider": "api",
+    "model": "deepseek-v4-pro",
+    "base_url": "${DEEPSEEK_BASE_URL}",
+    "api_key_env": "DEEPSEEK_API_KEY",
+    "max_tokens": 1024,
+    "timeout_seconds": 120,
+    "max_concurrent": 2
+  },
+  "small": {
+    "provider": "local_transformers",
+    "model": "Qwen2.5-7B-Instruct",
+    "model_path": "../models/Qwen2.5-7B-Instruct",
+    "max_tokens": 384,
+    "max_input_tokens": 2400,
+    "load_in_4bit": false
+  },
+  "routing": {
+    "small_max_context_chars": 6000,
+    "small_top_k": 3,
+    "small_max_dependencies": 1,
+    "fallback_to_large": true,
+    "small_route_mode": "cost"
+  },
+  "runtime": {
+    "max_workers": 2,
+    "max_nodes": 12,
+    "max_revisions": 2,
+    "max_total_revisions": 3,
+    "max_planner_calls": 24,
+    "max_model_calls": 48,
+    "max_task_seconds": 600,
+    "max_batch_nodes": 3,
+    "max_inflight_tasks": 4,
+    "final_check_mode": "planner"
+  }
+}
