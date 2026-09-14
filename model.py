@@ -240,7 +240,8 @@ class APIModel:
             {"role": "system", "content": system}, {"role": "user", "content": user}],
             "temperature": 0, "max_tokens": output_limit,
             "response_format": {"type": "json_object"}}
-        if self.config["model"].startswith("deepseek"):
+        if self.config["model"].casefold().startswith("deepseek"):
+            # 不区分大小写：端点上的模型名大小写不统一（如 DeepSeek-V4-Pro / deepseek-v4-pro）。
             payload["thinking"] = {"type": "disabled"}
         request_data = json.dumps(payload, ensure_ascii=False).encode()
         details = {"model": self.config["model"], "request_attempts": 0, "max_tokens": output_limit,
@@ -274,10 +275,22 @@ class APIModel:
                 choice = body["choices"][0]
                 content = choice["message"]["content"]
                 usage = body.get("usage")
-                details["usage"] = {k: v for k, v in usage.items() if k in {
-                    "prompt_tokens", "completion_tokens", "total_tokens",
-                    "prompt_cache_hit_tokens", "prompt_cache_miss_tokens"
-                } and type(v) is int and v >= 0} if isinstance(usage, dict) else None
+                details["usage"] = None
+                if isinstance(usage, dict):
+                    mapped = {k: v for k, v in usage.items() if k in {
+                        "prompt_tokens", "completion_tokens", "total_tokens",
+                        "prompt_cache_hit_tokens", "prompt_cache_miss_tokens"
+                    } and type(v) is int and v >= 0}
+                    # 兼容只回传 prompt_tokens_details.cached_tokens 的端点（如并行科技）：
+                    # 拆成 hit/miss 两个字段，下游命中率口径保持不变。
+                    prompt_details = usage.get("prompt_tokens_details")
+                    cached = prompt_details.get("cached_tokens") if isinstance(prompt_details, dict) else None
+                    prompt_tokens = mapped.get("prompt_tokens")
+                    if ("prompt_cache_hit_tokens" not in mapped and type(cached) is int and cached >= 0
+                            and type(prompt_tokens) is int and prompt_tokens >= cached):
+                        mapped["prompt_cache_hit_tokens"] = cached
+                        mapped["prompt_cache_miss_tokens"] = prompt_tokens - cached
+                    details["usage"] = mapped
                 if isinstance(content, str):
                     details["raw_response"] = content
                 finish_timings()

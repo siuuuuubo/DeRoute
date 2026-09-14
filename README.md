@@ -4,7 +4,7 @@
 
 当前调用量优化、验证结果及运行方式见 [CALL_REDUCTION.md](CALL_REDUCTION.md)，项目交接见 [HANDOFF.md](HANDOFF.md)。
 
-30 条示例来自 [musique_train_30shot_decomposition.txt](data_prompts/musique_train_30shot_decomposition.txt)。每次规划都携带这些示例，这是上下文学习，不会训练或更新模型参数。新版实验抽样测得 DeepSeek prompt 前缀缓存命中率 95.3%（该抽样基于 `deepseek-v4-pro`），因此默认保留 30-shot；可变任务状态继续放在固定前缀之后。自 2026-09-11 起远程大模型已切换为 `deepseek-flash`，其缓存命中率需重新测量。
+30 条示例来自 [musique_train_30shot_decomposition.txt](data_prompts/musique_train_30shot_decomposition.txt)。每次规划都携带这些示例，这是上下文学习，不会训练或更新模型参数。新版实验抽样测得 DeepSeek prompt 前缀缓存命中率 95.3%（该抽样基于 `deepseek-v4-pro`），因此默认保留 30-shot；可变任务状态继续放在固定前缀之后。远程大模型为 `DeepSeek-V4-Pro`，经并行科技端点（`llmapi.paratera.com/v1`）调用；模型名区分大小写，须用端点给出的原始大小写。
 
 ## 运行
 
@@ -155,7 +155,7 @@ Qwen 首先保留词项检索排名前 3 个命中段落；在 6000 字符上下
 
 模型连接集中在 `model.json`：
 
-- 大模型：`deepseek-flash`（2026-09-11 前为 `deepseek-v4-pro`；仓库内已有的实验结果均由 v4-pro 产出，不可混用），通过 Chat Completions API 调用；从配置指定的 `env_file`（当前 `.env`）读取地址和密钥，现有进程环境变量优先。配置和输出不保存密钥值。
+- 大模型：`DeepSeek-V4-Pro`（经并行科技端点 `llmapi.paratera.com/v1` 调用；模型名区分大小写），通过 Chat Completions API 调用；从配置指定的 `env_file`（当前 `.env`）读取地址和密钥，现有进程环境变量优先。配置和输出不保存密钥值。
 - 小模型：已有的 `../models/Qwen2.5-7B-Instruct`，由 Transformers 在本机加载，保持 `load_in_4bit=false`，进程内只加载一次，可在 RTX 5090 上使用原精度/自动精度。本次没有引入量化。
 - `agent.sh` 关闭在线模型下载，将运行缓存和临时文件放在 DeRoute 内。模型权重及兄弟项目只读。
 

@@ -2,7 +2,7 @@
   "env_file": ".env",
   "large": {
     "provider": "api",
-    "model": "deepseek-flash",
+    "model": "DeepSeek-V4-Pro",
     "base_url": "${DEEPSEEK_BASE_URL}",
     "api_key_env": "DEEPSEEK_API_KEY",
     "max_tokens": 1024,
@@ -13,7 +13,7 @@
       "final_check": 384
     },
     "timeout_seconds": 120,
-    "max_concurrent": 2,
+    "max_concurrent": 4,
     "max_retries": 2,
     "retry_backoff_seconds": 1,
     "retry_max_backoff_seconds": 8

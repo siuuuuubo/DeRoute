@@ -20,7 +20,7 @@ flowchart LR
     F --> O[工作流日志]
 ```
 
-DeepSeek 每次返回 `add`、`add_batch`、`revise`、`wait`、`finish` 或 `abort` 中的一个动作。默认最多批量提出 3 个必要节点，由代码等待真实执行结果后继续规划。30 条标准拆解作为上下文示例，每次规划都会读取；这是上下文学习，不会训练或更新模型参数。最新抽样的 DeepSeek prompt 前缀缓存命中率为 95.3%（基于 `deepseek-v4-pro`；2026-09-11 起改用 `deepseek-flash`，需重新测量），因此当前保留这 30 条示例。
+DeepSeek 每次返回 `add`、`add_batch`、`revise`、`wait`、`finish` 或 `abort` 中的一个动作。默认最多批量提出 3 个必要节点，由代码等待真实执行结果后继续规划。30 条标准拆解作为上下文示例，每次规划都会读取；这是上下文学习，不会训练或更新模型参数。最新抽样的 DeepSeek prompt 前缀缓存命中率为 95.3%（基于 `deepseek-v4-pro`），因此当前保留这 30 条示例。
 
 ## 已完成
 
