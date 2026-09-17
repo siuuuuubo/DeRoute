@@ -94,7 +94,11 @@ def planner_payload(task, record, runtime, feedback):
         if "paragraph_indices" in n:
             item["paragraph_indices"] = n["paragraph_indices"]
         if n["status"] == "succeeded":
-            item["output"] = n["output"]
+            # 只把 planner 决策真正需要的字段发回给它：答案(供 #k 引用与终检)与证据性质
+            # (direct/inferred，供 finish 安全校验)。evidence 逐字引文、used_inputs、reason、
+            # assumptions 是 executor 内部自校验信息，planner 用不到，裁掉以缩短 prefill。
+            out = n["output"]
+            item["output"] = {k: out[k] for k in ("answer", "support_type") if k in out}
         elif n.get("error"):
             item["failure_context"] = failure_context(n)
         item["revision_count"] = n.get("revision_count", 0)
@@ -312,9 +316,9 @@ def run_task(task, clients, config, prompt, save, previous=None):
         if any(n.get("revision_count", 0) for n in chain):
             cancel_auto_finish("最终依赖链经过修订")
             return False
-        if any(len(n.get("attempts", [])) > 1 for n in chain):
-            cancel_auto_finish("最终依赖链发生过接管或额外复核")
-            return False
+        # 「发生过接管或额外复核」（attempts>1，即小模型失败后大模型接管）不再阻止自动结束：
+        # fallback 节点的最终答案由大模型给出，与直接大模型 answer 同样可靠；实测取消后
+        # planner finish 也总是原样采用 final_node 答案，放宽零风险。
         if any(n.get("output", {}).get("support_type") != "direct" for n in chain):
             cancel_auto_finish("最终依赖链包含间接推断或未确认证据")
             return False

@@ -19,12 +19,13 @@
     "retry_max_backoff_seconds": 8
   },
   "small": {
-    "provider": "local_transformers",
+    "provider": "api",
     "model": "Qwen2.5-7B-Instruct",
-    "model_path": "../models/Qwen2.5-7B-Instruct",
-    "max_tokens": 384,
-    "max_input_tokens": 2400,
-    "load_in_4bit": false
+    "base_url": "http://127.0.0.1:8000/v1",
+    "api_key_env": "QWEN_API_KEY",
+    "timeout_seconds": 120,
+    "max_concurrent": 4,
+    "max_tokens": 384
   },
   "routing": {
     "small_max_context_chars": 6000,
@@ -37,8 +38,8 @@
   "runtime": {
     "max_workers": 2,
     "max_nodes": 12,
-    "max_revisions": 2,
-    "max_total_revisions": 3,
+    "max_revisions": 1,
+    "max_total_revisions": 2,
     "max_planner_calls": 24,
     "max_model_calls": 48,
     "max_task_seconds": 600,

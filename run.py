@@ -12,7 +12,7 @@ sys.dont_write_bytecode = True
 
 from dataset import read_dataset
 from decompose import fingerprint, load_prompt, run_task, workflow_signature, write_json
-from model import ModelError, load_config, make_clients, now, parse_json
+from model import ModelError, load_config, make_clients, now, parse_json, timing_intervals, timing_summary
 
 ROOT = Path(__file__).resolve().parent
 
@@ -180,11 +180,19 @@ def run_selected(tasks, config, output, resume=False):
                 fill()
 
         elapsed = round(time.perf_counter() - started, 3)
+        timing = timing_summary()
+        write_json(output / "timing_intervals.json", {
+            "batch_wall_seconds": elapsed,
+            "intervals": [{"role": x["role"], "start": round(x["start"] - started, 3),
+                           "end": round(x["end"] - started, 3),
+                           "duration": round(x["end"] - x["start"], 3)}
+                          for x in timing_intervals()]})
         write_json(metrics_path, {
             "started_at": started_at, "finished_at": now(), "batch_wall_seconds": elapsed,
             "cumulative_batch_wall_seconds": round(prior_batch_wall + elapsed, 3),
             "selected_tasks": len(tasks), "succeeded_tasks": success, "terminal_failed_tasks": terminal,
-            "max_inflight_tasks": max_inflight, "stopped_for_resumable_failure": stop_submitting})
+            "max_inflight_tasks": max_inflight, "stopped_for_resumable_failure": stop_submitting,
+            "model_timing": timing})
         print(f"完成 {success}/{len(tasks)}；工作流：{results}")
         return 0 if success == len(tasks) else 1
 

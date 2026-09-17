@@ -1,0 +1,161 @@
+你是复杂问题拆解器。下面是从 MuSiQue 训练集抽取的 30 个拆解示例，用于学习多跳问题如何形成有依赖关系的子问题。
+
+使用说明：
+1. 本文件作为 few-shot 示例块，使用时应与主拆解指令组合；调用方规定的最终输出格式仍然优先。
+2. 每个示例包含复杂问题、标准子问题和示例答案。示例答案只用于说明 #1、#2 等引用如何传递中间结果。
+3. 处理新问题时只生成拆解计划，不回答子问题，不输出示例答案，也不照抄示例中的实体。
+4. #k 表示第 k 个子问题的执行结果；引用它的步骤必须依赖该步骤。
+5. 保留原问题的约束，把每一步写成可以独立执行的明确问题；不要编造资料中没有的事实。
+6. 除明确的 #k 引用外，子问题不得使用 the writer、they、this season 等依赖原问题才能理解的指代；应直接写出实体名称或必要限定信息。
+
+
+示例 01（2 跳，源 ID：2hop__531536_126045）
+复杂问题：Who was in charge in the city where İsmail Keleş was born?
+标准拆解：
+  #1 子问题：İsmail Keleş >> place of birth
+     示例答案：Ankara
+  #2 子问题：Who was in charge of #1 ?
+     示例答案：Melih Gökçek
+
+示例 02（2 跳，源 ID：2hop__59478_89360）
+复杂问题：Who sings Mack the Knife with the artist who popularized the song High Hopes?
+标准拆解：
+  #1 子问题：where did the song high hopes come from
+     示例答案：Frank Sinatra
+  #2 子问题：who sings mack the knife with #1
+     示例答案：Quincy Jones
+
+示例 03（2 跳，源 ID：2hop__131644_55630）
+复杂问题：What was the 2013 governor salary in the state where Pocahontas Mounds are found?
+标准拆解：
+  #1 子问题：Which state is Pocahontas Mounds located?
+     示例答案：Mississippi
+  #2 子问题：what is the salary of the governor of #1
+     示例答案：$122,160
+
+示例 04（2 跳，源 ID：2hop__852082_829081）
+复杂问题：Of which county is the city where Francis Raymond Shea lives the seat?
+标准拆解：
+  #1 子问题：Francis Raymond Shea >> residence
+     示例答案：Knoxville
+  #2 子问题：#1 >> capital of
+     示例答案：Knox County
+
+示例 05（2 跳，源 ID：2hop__158048_62309）
+复杂问题：When did the US go to war with the country taekwondo originated from?
+标准拆解：
+  #1 子问题：Where was taekwondo originally from?
+     示例答案：Korea
+  #2 子问题：when did the us go to war with #1
+     示例答案：the Battle of Osan
+
+示例 06（3 跳，源 ID：3hop1__157791_1887_50817）
+复杂问题：What is the latest season of the Real Housewives series set in the state that, along with the state where Amalie Schoppe died, contains Ellis Island?
+标准拆解：
+  #1 子问题：In what state did Amalie Schoppe die?
+     示例答案：New York
+  #2 子问题：Ellis Island is considered in #1 state and which other?
+     示例答案：New Jersey
+  #3 子问题：what is the latest season of the real housewives of #2
+     示例答案：eighth
+
+示例 07（3 跳，源 ID：3hop1__69901_548096_527472）
+复杂问题：What mountain range is the range that Norris Mountain is part of in the state Yellowstone is set part of?
+标准拆解：
+  #1 子问题：where is the show yellowstone supposed to be
+     示例答案：Montana
+  #2 子问题：Norris Mountain (#1 ) >> part of
+     示例答案：Lewis Range
+  #3 子问题：#2 >> part of
+     示例答案：Rocky Mountains
+
+示例 08（3 跳，源 ID：3hop1__457260_544161_63634）
+复杂问题：Which organ of the organization of which the country where Talas can be found is a member has suspended its operations since 1994?
+标准拆解：
+  #1 子问题：Talas >> country
+     示例答案：Kyrgyzstan
+  #2 子问题：#1 >> member of
+     示例答案：United Nations
+  #3 子问题：which organ of #2 has suspended its operations since 1994
+     示例答案：United Nations Trusteeship Council
+
+示例 09（3 跳，源 ID：3hop1__61028_43572_372338）
+复杂问题：Where is the headquarters of the owner of the Roosevelt Hotel in the city with the biggest population in the US?
+标准拆解：
+  #1 子问题：what city has the biggest population in the united states
+     示例答案：New York
+  #2 子问题：who owns the roosevelt hotel in #1
+     示例答案：Pakistan International Airlines
+  #3 子问题：#2 >> headquarters location
+     示例答案：Jinnah International Airport
+
+示例 10（3 跳，源 ID：3hop1__291586_715233_43805）
+复杂问题：What is the country in the middle of the body of water Teafuone is located?
+标准拆解：
+  #1 子问题：Teafuone >> part of
+     示例答案：Nukufetau
+  #2 子问题：#1 >> located in or next to body of water
+     示例答案：Pacific Ocean
+  #3 子问题：country in the middle of #2
+     示例答案：Caroline Islands
+
+示例 11（4 跳，源 ID：4hop1__38130_8966_31714_48057）
+复杂问题：When did the country that recognized Gaddafi's government at an early date along with the country where a president was previously Eisenhower's Vice President start selling petrol in litres?
+标准拆解：
+  #1 子问题：Who served as Eisenhower's vice president?
+     示例答案：Nixon
+  #2 子问题：#1 was a president of what country?
+     示例答案：U.S.
+  #3 子问题：Along with the #2 , what major power recognized Gaddafi's government at an early date?
+     示例答案：U.K.
+  #4 子问题：when did #3 start selling petrol in litres
+     示例答案：1976
+
+示例 12（4 跳，源 ID：4hop1__189405_715233_91861_124556）
+复杂问题：Who fathered the person who led the first expedition to reach Asia by sailing west across the ocean containing the atoll that Faiava Lasi is part of?
+标准拆解：
+  #1 子问题：Faiava Lasi >> part of
+     示例答案：Nukufetau
+  #2 子问题：#1 >> located in or next to body of water
+     示例答案：Pacific Ocean
+  #3 子问题：who led the first expedition to reach asia by sailing west across #2
+     示例答案：Vasco da Gama
+  #4 子问题：Who fathered #3 ?
+     示例答案：Estêvão da Gama
+
+示例 13（4 跳，源 ID：4hop3__3157_3356_32417_24628）
+复杂问题：When did voters from the state the most successful American Idol contestant this season is from once again vote for someone from the party that dominated South Carolina's legislature?
+标准拆解：
+  #1 子问题：Who was the most successful recording artist from the fifth season of American Idol?
+     示例答案：Chris Daughtry
+  #2 子问题：What state is American Idol contestant #1 from?
+     示例答案：North Carolina
+  #3 子问题：Which party dominated South Carolina's state legislature?
+     示例答案：Democrat
+  #4 子问题：What year did #2 voters once again vote for a #3 ?
+     示例答案：2008
+
+示例 14（4 跳，源 ID：4hop3__43051_38788_25582_21116）
+复杂问题：How many people with the name others once used to call new students live in the country discovered by the colonizer of Angola and Mozambique?
+标准拆解：
+  #1 子问题：angola and mozambique were once colonies of which country
+     示例答案：Portugal
+  #2 子问题：What South American country did #1 discover?
+     示例答案：Brazil
+  #3 子问题：What name did fellow Collegers at Eton College once use for new admissions?
+     示例答案：'Jews'
+  #4 子问题：How many #3 live in #2 ?
+     示例答案：196,000-600,000
+
+示例 15（4 跳，源 ID：4hop3__360282_544708_764770_54023）
+复杂问题：When did the first restaurant that McDonaldization is named after open in the country of citizenship of the author of Doctrine and Discipline of Divorce?
+标准拆解：
+  #1 子问题：Doctrine and Discipline of Divorce >> author
+     示例答案：John Milton
+  #2 子问题：#1 >> country of citizenship
+     示例答案：England
+  #3 子问题：McDonaldization >> named after
+     示例答案：McDonald's
+  #4 子问题：when did the first #3 open in #2
+     示例答案：1974
+

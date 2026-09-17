@@ -18,6 +18,78 @@ def now():
     return datetime.now(timezone.utc).isoformat()
 
 
+# 进程级记录每次模型服务占用的单调时钟区间，用于统计大/小模型的忙时与并行重叠。
+_TIMING_INTERVALS = []
+_TIMING_LOCK = threading.Lock()
+
+
+def record_service_interval(role, service_start, service_end):
+    with _TIMING_LOCK:
+        _TIMING_INTERVALS.append({
+            "role": role,
+            "start": round(service_start, 6),
+            "end": round(service_end, 6),
+        })
+
+
+def timing_intervals():
+    with _TIMING_LOCK:
+        return list(_TIMING_INTERVALS)
+
+
+def _merge_intervals(intervals):
+    merged = []
+    for start, end in sorted(intervals):
+        if merged and start <= merged[-1][1]:
+            if end > merged[-1][1]:
+                merged[-1] = (merged[-1][0], end)
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def _union_length(intervals):
+    return sum(end - start for start, end in _merge_intervals(intervals))
+
+
+def _overlap_length(left, right):
+    a, b = _merge_intervals(left), _merge_intervals(right)
+    i = j = 0
+    total = 0.0
+    while i < len(a) and j < len(b):
+        start = max(a[i][0], b[j][0])
+        end = min(a[i][1], b[j][1])
+        if start < end:
+            total += end - start
+        if a[i][1] < b[j][1]:
+            i += 1
+        else:
+            j += 1
+    return total
+
+
+def timing_summary():
+    """汇总大/小模型的服务时长（串行和）与忙时（区间并集）以及两者的并行重叠时间。"""
+    large = [(x["start"], x["end"]) for x in timing_intervals() if x["role"] == "large"]
+    small = [(x["start"], x["end"]) for x in timing_intervals() if x["role"] == "small"]
+    large_service = sum(end - start for start, end in large)
+    small_service = sum(end - start for start, end in small)
+    large_busy = _union_length(large)
+    small_busy = _union_length(small)
+    overlap = _overlap_length(large, small)
+    return {
+        "large_service_attempts": len(large),
+        "small_service_attempts": len(small),
+        "large_service_seconds": round(large_service, 3),
+        "small_service_seconds": round(small_service, 3),
+        "large_busy_seconds": round(large_busy, 3),
+        "small_busy_seconds": round(small_busy, 3),
+        "overlap_seconds": round(overlap, 3),
+        "large_alone_seconds": round(max(0.0, large_busy - overlap), 3),
+        "small_alone_seconds": round(max(0.0, small_busy - overlap), 3),
+    }
+
+
 class ModelError(RuntimeError):
     def __init__(self, message, details=None):
         super().__init__(message)
@@ -270,7 +342,9 @@ class APIModel:
                                 request, timeout=self.config["timeout_seconds"]) as response:
                             encoded = response.read()
                     finally:
-                        details["service_seconds"] += time.perf_counter() - service_start
+                        service_end = time.perf_counter()
+                        details["service_seconds"] += service_end - service_start
+                        record_service_interval(getattr(self, "role", "large"), service_start, service_end)
                 body = parse_json(encoded.decode("utf-8"))
                 choice = body["choices"][0]
                 content = choice["message"]["content"]
@@ -395,7 +469,9 @@ class LocalModel:
                     if not content or (count >= self.config["max_tokens"] and int(generated[-1]) not in eos):
                         raise ModelError("本地模型响应为空或被截断", details)
                 finally:
-                    details["service_seconds"] = time.perf_counter() - service_start
+                    service_end = time.perf_counter()
+                    details["service_seconds"] = service_end - service_start
+                    record_service_interval(getattr(self, "role", "small"), service_start, service_end)
             finish_timings()
             return details
         except ModelError as exc:
@@ -407,9 +483,14 @@ class LocalModel:
 
 
 def make_clients(config):
-    return {"large": APIModel(config["large"]),
-            "small": LocalModel(config["small"]) if config["small"]["provider"] == "local_transformers"
-            else APIModel(config["small"])}
+    large = APIModel(config["large"])
+    large.role = "large"
+    if config["small"]["provider"] == "local_transformers":
+        small = LocalModel(config["small"])
+    else:
+        small = APIModel(config["small"])
+    small.role = "small"
+    return {"large": large, "small": small}
 
 
 class CallBudget:

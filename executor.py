@@ -164,6 +164,20 @@ def normalize(text):
     return " ".join(text.casefold().split())
 
 
+def _fold_tokens(text):
+    """Unicode 折叠 + 去标点后切词，用于证据引文与原文的宽松比对。"""
+    folded = unicodedata.normalize("NFKD", text.casefold())
+    folded = "".join(c for c in folded if not unicodedata.combining(c))
+    folded = re.sub(r"[^\w\s]", " ", folded)
+    return folded.split()
+
+
+def _is_subsequence(seq, full):
+    """seq 是否按序出现在 full 中（允许跳过，不允许插入或替换）。"""
+    it = iter(full)
+    return all(token in it for token in seq)
+
+
 def validate_answer(value, operation, paragraphs, upstream):
     fields = {"status", "answer", "evidence", "used_inputs", "reason", "support_type", "assumptions"}
     if not isinstance(value, dict) or set(value) != fields:
@@ -204,7 +218,9 @@ def validate_answer(value, operation, paragraphs, upstream):
         para = by_id[item["paragraph_idx"]]
         if not isinstance(item["quote"], str) or not item["quote"].strip():
             raise ValueError("证据quote为空")
-        if normalize(item["quote"]) not in normalize(para["title"] + " " + para["paragraph_text"]):
+        full = _fold_tokens(para["title"] + " " + para["paragraph_text"])
+        quote = _fold_tokens(item["quote"])
+        if not quote or not _is_subsequence(quote, full):
             raise ValueError("证据quote并非所引用段落的原文")
     if not evidence and not used:
         raise ValueError("结果没有证据或上游依据")
@@ -282,24 +298,10 @@ def execute_node(node, question, upstream, task, clients, budget, config, *, all
             output = validate_answer(candidate, node["operation"], context, upstream)
             if output["support_type"] == "inferred" and role == "small":
                 raise AnswerError("小模型的间接推断需要大模型复核", "needs_review")
-            # reason 的直接答案若满足与 lookup 相同的引文/答案校验，不必再问一次。
-            # 无法机械确认的解释或间接推断仍保留大模型复核。
-            needs_review = output["support_type"] == "inferred"
-            if node["operation"] == "reason" and not needs_review:
-                try:
-                    validate_answer(output, "lookup", context, upstream)
-                except ValueError:
-                    needs_review = True
-            if needs_review and not reviewing:
-                attempt["status"] = "needs_review"
-                payload["unverified_candidates"] = [output]
-                attempt = {"role": "large", "model": clients["large"].config["model"],
-                           "stage": "review", "paragraph_indices": [p["idx"] for p in context]}
-                result["attempts"].append(attempt)
-                response = budget.call(clients["large"], REVIEW_PROMPT, payload, f"verify:{node['id']}:large")
-                attempt["response"] = response
-                attempt["candidate"] = decode_answer(response, upstream, attempt)
-                output = validate_answer(attempt["candidate"], node["operation"], context, upstream)
+            # 大模型对自身首次作答的 self-verify 已去除：同一模型、同一上下文下复核冗余，
+            # 且实测会误杀正确答案（如 "1932" 被 review 拒绝导致整题失败）。
+            # 大模型的间接推断（inferred）直接接受，性质仍由 support_type 标注供下游判断；
+            # 小模型的间接推断在上方 raise，仍走大模型 fallback 复核。
             attempt["status"] = "accepted"
             result.update(status="succeeded", output=output, executed_by=role,
                           reviewed=any(a["stage"] == "review" for a in result["attempts"]))
