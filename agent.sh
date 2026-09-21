@@ -12,4 +12,6 @@ export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 cd "$DAGLAB_ROOT"
 trap 'rmdir "$DAGLAB_ROOT/.tmp" 2>/dev/null || true' EXIT
-conda run --no-capture-output -n agent python "$@"
+# 运行环境：默认 rag310（Python 3.10，含 torch，可跑 small.provider=local_transformers）。
+# 纯 API 模式不需要 torch；如需换环境用 DEROUTE_CONDA_ENV 覆盖。
+conda run --no-capture-output -n "${DEROUTE_CONDA_ENV:-rag310}" python "$@"
