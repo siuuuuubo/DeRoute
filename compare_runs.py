@@ -1,10 +1,10 @@
 """对比 baseline 与新版 100 题的分层评测 + 归因 + 成本（耗时/调用数）。
 
 用法：
-  python compare_runs.py --baseline outputs/baseline_100/evaluation_layers.json \\
-      --new outputs/exp100_v2/evaluation_layers.json \\
-      --baseline_workflows outputs/baseline_100/workflows.jsonl \\
-      --new_workflows outputs/exp100_v2/workflows.jsonl
+  python compare_runs.py --baseline outputs/devtest_random100_4way_20260916/evaluation_layers.json \\
+      --new outputs/devtest_random100_4way_tw8_20260917/evaluation_layers.json \\
+      --baseline_workflows outputs/devtest_random100_4way_20260916/workflows.jsonl \\
+      --new_workflows outputs/devtest_random100_4way_tw8_20260917/workflows.jsonl
 """
 import argparse
 import json

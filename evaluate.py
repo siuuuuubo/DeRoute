@@ -1,7 +1,6 @@
 """离线答案评测。只读取已完成的日志；不调用模型，也不向运行流程传入标准答案。"""
 import argparse
 from collections import Counter
-import json
 from pathlib import Path
 import re
 import string
