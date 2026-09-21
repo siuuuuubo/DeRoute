@@ -2,7 +2,7 @@
 
 ## 目标与核心思路
 
-DeRoute 用大小模型协作完成 MuSiQue 复杂问题。DeepSeek Flash（2026-09-11 前为 V4 Pro，已有实验结果均由 V4 Pro 产出）负责逐步拆解、失败诊断和必要的复杂推理；本地 Qwen2.5-7B 优先执行简单事实查询。代码维护一个动态 DAG，把每个子任务的答案、证据和状态传给后续节点。
+DeRoute 用大小模型协作完成 MuSiQue 复杂问题。大模型为 **DeepSeek-V4-Pro**（并行科技端点，见 `model.json`），负责逐步拆解、失败诊断和必要的复杂推理；小模型为 **Qwen2.5-7B-Instruct**，经本地 vLLM 以 OpenAI 兼容 API 暴露（`http://127.0.0.1:8000/v1`），优先执行简单事实查询。代码维护一个动态 DAG，把每个子任务的答案、证据和状态传给后续节点。
 
 核心流程：
 
@@ -20,7 +20,9 @@ flowchart LR
     F --> O[工作流日志]
 ```
 
-DeepSeek 每次返回 `add`、`add_batch`、`revise`、`wait`、`finish` 或 `abort` 中的一个动作。默认最多批量提出 3 个必要节点，由代码等待真实执行结果后继续规划。30 条标准拆解作为上下文示例，每次规划都会读取；这是上下文学习，不会训练或更新模型参数。最新抽样的 DeepSeek prompt 前缀缓存命中率为 95.3%（基于 `deepseek-v4-pro`），因此当前保留这 30 条示例。
+DeepSeek 每次返回 `add`、`add_batch`、`revise`、`wait`、`finish` 或 `abort` 中的一个动作。默认最多批量提出 3 个必要节点，由代码等待真实执行结果后继续规划。30 条标准拆解作为上下文示例，每次规划都会读取；这是上下文学习，不会训练或更新模型参数。
+
+缓存命中率随并发档位与修订量在 **62%~91%** 之间波动（tw8 为 62.4%，tw4 为 75.7%~90.8%），**不是固定的 95.3%**（该数字来自 2026-09-11 前的抽样，已过时）。实测表明裁减这 30 条前缀只压缩 prefill，**几乎不影响墙钟**（见实验总结 §8.2/§8.3），故保留理由改为"省成本"而非"提速"。
 
 ## 已完成
 
@@ -33,7 +35,7 @@ DeepSeek 每次返回 `add`、`add_batch`、`revise`、`wait`、`finish` 或 `ab
 - 支持调用预算、超时、原子检查点、进程锁和断点续跑。
 - 独立评测只在运行结束后读取标准答案，失败计零分，同一任务取最后一次记录。
 
-历史 7 题实测完成并答对 5 题，EM/F1 为 71.43%；初版为 3/7。这是之前版本的结果，不是本轮调用量优化的效果。100 题正式结果与缓存抽样见 `../DeRoute_vs_DecomP_devtest100_实验总结.md`。本轮 conda `agent` 中 100 项离线测试通过，没有新增真实模型评测。
+历史 7 题实测完成并答对 5 题，EM/F1 为 71.43%；初版为 3/7。这是之前版本的结果，不是调用量优化的效果。100 题正式结果见 `../DeRoute_vs_DecomP_devtest100_实验总结.md`（当前最优：tw8，480.4s / EM 59%，见该文 §8）。conda `rag310` 中 100 项离线测试全部通过。
 
 仍失败的两题：UHF 题缺少直接的发行关系，模型拒绝把“融资支持”推成“发行”；足球题既缺少明确的 1894–95 足总杯冠军句，又需要从 Duane Courtney 的多支球队中利用后续比赛关系消歧。
 
@@ -48,10 +50,10 @@ DeepSeek 每次返回 `add`、`add_batch`、`revise`、`wait`、`finish` 或 `ab
 - 已确定的最后一跳可随 `add`/`add_batch` 提交 `finish_after_success`。默认只在全链直接证据、未修订、未接管/额外复核时省去末尾 planner；其余情况仍继续增量规划。
 - 提供合法动作、可修订目标、可结束节点、剩余预算及近期错误；明确的引用元数据由代码补齐。
 - 默认 `finish.reason` 承担最后关系核验，省略理由则回退独立检查。`runtime.final_check_mode="always"` 用于保留独立核验的对照实验。
-- 直接 `reason` 答案通过事实提取级别校验时省去重复复核；间接推断及无法机械确认的答案仍复核。
+- **大模型对自身首答的 self-verify 已完全移除**（`8d6f776`）。原因：同一模型、同一上下文下复核冗余，且实测会误杀正确答案（如 "1932" 被 review 拒绝导致整题失败）。大模型的间接推断直接接受，性质仍由 `support_type="inferred"` 标注。**唯一保留的复核路径**是小模型给出 `inferred` 答案时的 fallback 复核。
 - 调用和运行时间预算跨 `--resume` 累计。终止失败不重新运行；传输中断保留候选，从接管/复核阶段恢复。
-- 一题累计最多修订 3 次；达到总额后不再向 planner 提供 `revise`，减少多节点之间的低收益重试。
-- 默认并发推进 4 题，DeepSeek 仍最多 2 并发、单 GPU Qwen 仍最多 1 并发；每题使用独立原子检查点，整批墙钟写入 `run_metrics.json`。
+- 一题累计最多修订 2 次、单节点最多 1 次（`max_revisions=1, max_total_revisions=2`）。该档是"牺牲精度换速度"曲线上的甜点：比 2/3 档快 20%、只掉 4 EM。达到总额后不再向 planner 提供 `revise`。
+- **并发分两层，不要混为一谈**：任务层 `--task-workers`（默认读 `runtime.max_inflight_tasks=4`）与 API 槽位层 `large.max_concurrent=4`。把任务层提到 8、API 层保持 4，可让 planner 串行门阻塞时由其他任务顶上 API 槽位，实测墙钟 **−13.3%**（见实验总结 §8.4）。**建议把任务层默认值写进 `model.json`。**
 - 默认 `small_route_mode=cost` 继续把合格 lookup 交给 Qwen 以减少大模型调用；`parallel_only` 仅用于延迟优先的对照实验，会增加大模型调用。
 - API 调用保留 prompt 缓存命中和未命中 token，工作流和 `compare_runs.py` 都会汇总命中率。
 - Qwen 检索在字符预算允许时从 top-3 扩展到最多 top-5，不增加小模型调用；保持 `load_in_4bit=false`，预留 RTX 5090 原精度/自动精度加载。
@@ -62,7 +64,7 @@ DeepSeek 每次返回 `add`、`add_batch`、`revise`、`wait`、`finish` 或 `ab
 
 ## 当前并行能力与后续空间
 
-单题独立就绪节点最多并发 2 个；整批默认同时推进 4 题。本地 Qwen 单 GPU 仍只有一个请求，远程 DeepSeek 允许最多 2 个并发请求。批内所有符号依赖必须等待真实上游答案。只有规划动作明确设置 `continue_planning:true` 且执行池有容量，才在执行期间提前扩展独立工作。
+单题独立就绪节点最多并发 2 个（`runtime.max_workers`）；整批任务层默认同时推进 4 题（`max_inflight_tasks`，建议提到 8）。远程 DeepSeek 允许最多 **4** 个并发请求（`large.max_concurrent=4`），本地 vLLM Qwen 同样 4 并发。批内所有符号依赖必须等待真实上游答案。只有规划动作明确设置 `continue_planning:true` 且执行池有容量，才在执行期间提前扩展独立工作（实测触发率 0%，planner 是硬串行门）。
 
 小模型失败后仍由原题内工作线程执行远程接管；连续批处理服务属于后续性能工作。小模型保持非量化加载，本轮只增加 GPU 锁排队时间与真实推理时间的分项统计。
 
@@ -77,7 +79,7 @@ DeepSeek 每次返回 `add`、`add_batch`、`revise`、`wait`、`finish` 或 `ab
 | `decompose.py` | 增量规划、状态机、调度和检查点 |
 | `graph.py` | DAG、依赖、修订和最终链校验 |
 | `executor.py` | 检索、路由、执行、复核和证据检查 |
-| `model.py` / `model.json` | DeepSeek API、本地 Qwen、缓存统计、并发和预算配置 |
+| `model.py` / `model.json` | DeepSeek API、本地 vLLM Qwen、缓存统计、并发和预算配置 |
 | `data_prompts/` | 拆解规则和 30-shot 示例 |
 | `evaluate.py` | 离线 EM/F1 评测，不调用模型 |
 | `tests/test_core.py` / `tests/test_call_reduction.py` | 功能、并发与调用量回归测试 |

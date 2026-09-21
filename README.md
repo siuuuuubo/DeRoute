@@ -1,6 +1,6 @@
 # DeRoute：逐步拆解与大小模型协作
 
-读取 MuSiQue 问题，让 **DeepSeek Flash 增量提出必要子任务，每批最多 3 个**，由代码检查依赖、选择执行模型并调度。子任务的真实答案回传给拆解器，决定下一步，最终形成可追踪中间结果的任务流。默认执行完当前批次才继续规划，避免调用大模型等待结果；数据集运行默认并发处理 4 题，让本地 Qwen 与其他题的大模型请求重叠。
+读取 MuSiQue 问题，让 **DeepSeek-V4-Pro 增量提出必要子任务，每批最多 3 个**，由代码检查依赖、选择执行模型并调度。子任务的真实答案回传给拆解器，决定下一步，最终形成可追踪中间结果的任务流。默认执行完当前批次才继续规划，避免调用大模型等待结果；数据集运行默认并发处理 4 题，让本地 Qwen 与其他题的大模型请求重叠。
 
 当前调用量优化、验证结果及运行方式见 [CALL_REDUCTION.md](CALL_REDUCTION.md)，项目交接见 [HANDOFF.md](HANDOFF.md)。
 
@@ -8,7 +8,7 @@
 
 ## 运行
 
-在 DeRoute 目录使用已有 conda `agent` 环境：
+在 DeRoute 目录使用已有 conda `rag310` 环境：
 
 ```bash
 # 检查整个数据集，显示前5条；不调用模型
@@ -45,7 +45,7 @@ bash agent.sh -m unittest discover -s tests -v
 bash agent.sh evaluate.py --predictions outputs/experiment/workflows.jsonl --gold data_ori/musique_ans_v1.0_dev.jsonl --output outputs/experiment/evaluation.json
 ```
 
-`--input` 接受 JSONL 文件或目录，默认 `data_test/musique_ans_v1.0_dev_test.jsonl`。`data_test/` 还含有一份与主文件 ID 重叠的并行子集，因此不应把整个目录作为默认实验输入。`--id` 可重复传入，与 `--limit`、`--all` 互斥。`decompose` 是 `run` 的别名，也会执行子任务。`--task-workers` 控制跨任务并发，默认 4；`--auto-finish-mode off` 可关闭终点预声明做消融。远程 API 仍受 `large.max_concurrent=2` 限制，本地 Qwen 仍由单 GPU 锁串行执行。
+`--input` 接受 JSONL 文件或目录，默认 `data_test/musique_ans_v1.0_dev_test.jsonl`。`data_test/` 还含有一份与主文件 ID 重叠的并行子集，因此不应把整个目录作为默认实验输入。`--id` 可重复传入，与 `--limit`、`--all` 互斥。`decompose` 是 `run` 的别名，也会执行子任务。`--task-workers` 控制跨任务并发，默认 4；`--auto-finish-mode off` 可关闭终点预声明做消融。远程 API 仍受 `large.max_concurrent=4` 限制，本地 Qwen 仍由单 GPU 锁串行执行。
 
 已有输出时需要 `--resume`。想重新实验，用 `--output outputs/experiment2`。模型配置或提示词变化后，需要使用新输出目录，避免混用不同实验。所有输出必须位于 DeRoute 内。
 
@@ -189,11 +189,11 @@ API 响应中的 `prompt_cache_hit_tokens` 和 `prompt_cache_miss_tokens` 会保
 
 ## 调用量优化验证（2026-09-11）
 
-conda `agent` 中 **100 项离线测试通过**，覆盖调用次数、安全自动结束、批量原子性、退避重试与物理请求统计、自适应小模型检索、跨任务并发、累计预算、缓存统计和多次中断恢复。新增的确定性两跳用例中，预声明最终节点将 planner 从 2 次降为 1 次、总调用从 4 次降为 3 次。这不是实际 MuSiQue 的准确率或速度结果。配置、对照结果和新实验命令见 [CALL_REDUCTION.md](CALL_REDUCTION.md)。
+conda `rag310` 中 **100 项离线测试通过**，覆盖调用次数、安全自动结束、批量原子性、退避重试与物理请求统计、自适应小模型检索、跨任务并发、累计预算、缓存统计和多次中断恢复。新增的确定性两跳用例中，预声明最终节点将 planner 从 2 次降为 1 次、总调用从 4 次降为 3 次。这不是实际 MuSiQue 的准确率或速度结果。配置、对照结果和新实验命令见 [CALL_REDUCTION.md](CALL_REDUCTION.md)。
 
 ## 历史修复验证（2026-09-09，非本轮调用量优化结果）
 
-conda `agent` 中 **50 项离线功能测试通过**，覆盖候选保留、间接推断复核、失败修订、回溯后的下游失效、最终关系与依赖链修复、替代失败旁支、并行执行、预算、断点恢复和独立评分。这些测试使用模拟模型，不是答对 50 道数据集问题。
+conda `rag310` 中 **50 项离线功能测试通过**，覆盖候选保留、间接推断复核、失败修订、回溯后的下游失效、最终关系与依赖链修复、替代失败旁支、并行执行、预算、断点恢复和独立评分。这些测试使用模拟模型，不是答对 50 道数据集问题。
 
 对初版同一组 7 题真实调用 DeepSeek 和本地 Qwen，并独立匹配标准答案及别名：**完成 5 条，答对 5 条，EM/F1 均为 71.43%**；初版为 3/7（42.86%）。详情见 [独立评测](outputs/verified/evaluation.json) 和 [初版评测](outputs/baseline_evaluation.json)。未运行全部 2417 题。
 
@@ -215,7 +215,7 @@ conda `agent` 中 **50 项离线功能测试通过**，覆盖候选保留、间�
 
 ## 初版验证（2026-09-09）
 
-在 conda `agent` 中通过 25 项离线测试，包括用线程同步屏障验证独立大小模型节点确实同时运行、额度错误后的节点恢复、测试标签隔离。整个数据集通过格式检查，训练示例和测试文件的 SHA256 与修改前一致。
+在 conda `rag310` 中通过 25 项离线测试，包括用线程同步屏障验证独立大小模型节点确实同时运行、额度错误后的节点恢复、测试标签隔离。整个数据集通过格式检查，训练示例和测试文件的 SHA256 与修改前一致。
 
 初版真实调用 DeepSeek 和本地 Qwen，共处理 7 条样本（前 5 条及额外 2 条分支候选），3 条完成，4 条因模型报告证据不足停止。未执行全部 2417 条；后来使用独立评测确认这 3 条答案均正确，初版 EM 为 3/7。初轮修复前的 2 条失败尝试另行保留。
 

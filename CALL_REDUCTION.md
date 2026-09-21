@@ -60,7 +60,7 @@
 
 ## 离线验证
 
-在已有 conda `agent` 环境运行：
+在已有 conda `rag310` 环境运行：
 
 ```bash
 bash agent.sh -m unittest discover -s tests -v
