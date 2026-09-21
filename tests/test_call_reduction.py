@@ -10,7 +10,7 @@ import unittest
 from unittest.mock import patch
 
 from decompose import available_revision_targets, planner_payload, run_task, workflow_signature, fingerprint, write_json
-from executor import FINISH_PROMPT, REVIEW_PROMPT, check_finish, execute_node
+from executor import ANSWER_PROMPT, FINISH_PROMPT, REVIEW_PROMPT, check_finish, execute_node
 from graph import normalize_planner_node, validate_node, validate_revision
 from model import CallBudget, ModelError, parse_model_json
 from run import run_selected
@@ -185,20 +185,21 @@ class CallReductionTests(unittest.TestCase):
         changed = dict(node(), expected_output="a city name, excluding province and country")
         self.assertEqual(validate_revision(changed, [old], 2), changed)
 
-    def test_direct_reason_without_extractive_support_still_requires_review(self):
+    def test_direct_reason_is_accepted_without_a_self_review(self):
+        """reason 节点的答案即使不是原文摘录，大模型首答也直接接受，只花一次调用。"""
         client = FakeClient("large")
         def complete(system, user, live=False):
             client.requests.append((system, json.loads(user)))
-            return response(answer("AlphaTown is warmer than BetaTown")) if system != REVIEW_PROMPT else response(answer())
+            return response(answer("AlphaTown is warmer than BetaTown"))
         client.complete = complete
         budget = CallBudget(3)
         step = node(operation="reason")
         result = execute_node(step, step["question"], {}, task(),
                               {"large": client, "small": FakeClient("small")}, budget, config()["routing"])
         self.assertEqual(result["status"], "succeeded")
-        self.assertEqual(result["output"]["answer"], "AlphaTown")
-        self.assertEqual(len(budget.snapshot()), 2)
-        self.assertEqual(client.requests[1][0], REVIEW_PROMPT)
+        self.assertEqual(result["output"]["answer"], "AlphaTown is warmer than BetaTown")
+        self.assertEqual(len(budget.snapshot()), 1)
+        self.assertEqual([system for system, _ in client.requests], [ANSWER_PROMPT])
 
     def test_checkpoint_persists_terminal_status_and_elapsed_time_before_final_save(self):
         client = FakeClient("large")
@@ -313,16 +314,23 @@ class CallReductionTests(unittest.TestCase):
         self.assertEqual(len(result["calls"]), 5)
 
     def test_interrupted_inference_review_reuses_existing_candidate(self):
-        class Client(FakeClient):
+        """小模型给出 inferred 答案时触发大模型复核（唯一保留的 review 路径）。复核传输中断
+        后续跑，大模型应带着已保存的候选直接复核，而不是让小模型重新作答。"""
+        class Interrupted(FakeClient):
             def complete(self, system, user, live=False):
                 data = json.loads(user)
+                self.requests.append((system, data))
                 if system == "PLAN":
-                    return response({"action": "add", "node": node(operation="reason")})
+                    return response({"action": "add", "node": node()} if not data["nodes"] else finish("n1"))
                 if system == REVIEW_PROMPT:
                     raise ModelError("temporary review transport failure")
                 return response(dict(answer(), support_type="inferred", assumptions=["alias bridge"]))
-        first, _ = self.run_flow({"large": Client("large"), "small": FakeClient("small")})
+
+        first, _ = self.run_flow({"large": Interrupted("large"), "small": Interrupted("small")})
         self.assertEqual(first["status"], "paused")
+        review = first["nodes"][0]["attempts"][-1]
+        self.assertEqual((review["role"], review["stage"]), ("large", "review"))
+
         large = FakeClient("large")
         def complete(system, user, live=False):
             data = json.loads(user)
@@ -333,17 +341,19 @@ class CallReductionTests(unittest.TestCase):
         self.assertEqual(result["status"], "succeeded")
         self.assertEqual(large.requests[0][0], REVIEW_PROMPT)
         self.assertEqual(large.requests[0][1]["unverified_candidates"][0]["answer"], "AlphaTown")
-        self.assertEqual(len(result["calls"]), 5)
 
     def test_candidate_survives_multiple_interrupted_reviews(self):
-        class Client(FakeClient):
+        class Interrupted(FakeClient):
             def complete(self, system, user, live=False):
+                data = json.loads(user)
+                self.requests.append((system, data))
                 if system == "PLAN":
-                    return response({"action": "add", "node": node(operation="reason")})
+                    return response({"action": "add", "node": node()} if not data["nodes"] else finish("n1"))
                 if system == REVIEW_PROMPT:
                     raise ModelError("temporary review failure")
                 return response(dict(answer(), support_type="inferred", assumptions=["alias bridge"]))
-        clients = {"large": Client("large"), "small": FakeClient("small")}
+
+        clients = {"large": Interrupted("large"), "small": Interrupted("small")}
         first, _ = self.run_flow(clients)
         second, _ = self.run_flow(clients, previous=first)
         self.assertEqual(second["status"], "paused")
@@ -356,7 +366,6 @@ class CallReductionTests(unittest.TestCase):
         self.assertEqual(result["status"], "succeeded")
         self.assertEqual(large.requests[0][0], REVIEW_PROMPT)
         self.assertEqual(large.requests[0][1]["unverified_candidates"][0]["answer"], "AlphaTown")
-        self.assertEqual(len(result["calls"]), 6)
 
     def test_resume_skips_terminal_failure_without_appending_duplicate_record(self):
         cfg = config()

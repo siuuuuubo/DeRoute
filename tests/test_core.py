@@ -362,19 +362,20 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(result["attempts"][0]["failure_kind"], "needs_review")
         self.assertEqual(clients["large"].requests[0][0], REVIEW_PROMPT)
 
-    def test_large_inference_is_not_accepted_if_review_rejects(self):
+    def test_large_inference_is_accepted_without_a_self_review(self):
+        """大模型不再 self-verify 自己的首答：同一模型、同一上下文下复核冗余，且实测会误杀
+        正确答案（如 "1932" 被 review 拒绝导致整题失败）。inferred 性质仍由 support_type 标注，
+        供下游节点与终检判断；小模型的 inferred 仍会 fallback 到大模型复核（见下一测试）。"""
         client = FakeClient("large")
         inferred = dict(answer(), support_type="inferred", assumptions=["unverified identity bridge"])
-        def complete(system, user, live=False):
-            return response(dict(inferred, status="insufficient", support_type="insufficient")
-                            if system == REVIEW_PROMPT else inferred)
-        client.complete = complete
+        client.complete = lambda system, user, live=False: response(inferred)
         budget = CallBudget(4)
         result = execute_node(node(operation="reason"), "Alpha", {}, task(),
                               {"large": client}, budget, config()["routing"])
-        self.assertEqual(result["status"], "failed")
-        self.assertEqual(len(budget.snapshot()), 2)
-        self.assertNotIn("output", result)
+        self.assertEqual(result["status"], "succeeded")
+        self.assertEqual(result["output"]["support_type"], "inferred")
+        self.assertEqual(len(budget.snapshot()), 1)
+        self.assertNotIn(REVIEW_PROMPT, [system for system, _ in client.requests])
 
     def test_inference_still_requires_real_quotes_and_explicit_assumptions(self):
         for value in [dict(answer(), support_type="inferred"),
